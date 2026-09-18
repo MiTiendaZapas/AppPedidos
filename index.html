@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Pedidos - Zapatillas</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <header class="topbar">
+        <div class="topbar-marca">
+            <span class="topbar-logo">👟</span>
+            <h1>Sistema de Pedidos</h1>
+        </div>
+        <div class="topbar-acciones">
+            <span id="estado-conexion" class="chip chip-conexion estado-local" title="Modo de guardado">
+                <span class="punto"></span> <span id="estado-conexion-texto">Cargando...</span>
+            </span>
+            <button id="btn-tema" class="btn-tema" title="Cambiar a modo oscuro">🌙</button>
+            <button id="btn-config" class="btn btn-outline" title="Configurar precios y clientes">
+                <span aria-hidden="true">⚙️</span> Configuración
+            </button>
+        </div>
+    </header>
+
+    <!-- NAVEGACIÓN: una lista de pedidos por pestaña (Zapatillas es la
+         principal y no se puede borrar) + Estadísticas al mismo nivel. -->
+    <nav class="nav-listas">
+        <div class="nav-listas-tabs" id="nav-listas-tabs"></div>
+        <button type="button" id="btn-nueva-lista" class="btn-nueva-lista" title="Crear una lista nueva">+ Nueva lista</button>
+        <div class="nav-listas-separador"></div>
+        <button type="button" id="btn-tab-estadisticas" class="nav-lista-tab">📊 Estadísticas</button>
+    </nav>
+
+    <div id="vista-listas" class="layout">
+
+        <!-- COLUMNA IZQUIERDA: Formulario -->
+        <aside class="card panel-form">
+            <h2 class="card-titulo">Nuevo pedido</h2>
+
+            <form id="pedido-form">
+                <div class="campo">
+                    <label for="cliente">Cliente</label>
+                    <input type="text" id="cliente" list="opciones-clientes" autocomplete="off" required placeholder="Nombre del cliente...">
+                    <datalist id="opciones-clientes"></datalist>
+                </div>
+
+                <label class="checkbox-linea">
+                    <input type="checkbox" id="cliente-grupo">
+                    <span>Es del grupo de revendedores <em>(precio mayorista)</em></span>
+                </label>
+
+                <!-- CAMPOS COMPARTIDOS: aplican a los dos modos de carga de abajo -->
+                <div class="campo">
+                    <label for="pago">Forma de pago <span class="opcional">(opcional)</span></label>
+                    <select id="pago">
+                        <option value="" selected></option>
+                        <option value="Efectivo">Efectivo</option>
+                        <option value="Efectivo/seña">Efectivo/seña</option>
+                        <option value="Transferencia">Transferencia</option>
+                        <option value="Trans/seña">Trans/seña</option>
+                        <option value="Cambio">Cambio (+recargo)</option>
+                    </select>
+                </div>
+
+                <div class="fila-2">
+                    <div class="campo">
+                        <label for="estado">Estado <span class="opcional">(opcional)</span></label>
+                        <select id="estado">
+                            <option value="" selected></option>
+                            <option value="❌">No confirmado</option>
+                            <option value="✅">Confirmado</option>
+                        </select>
+                    </div>
+                    <div class="campo">
+                        <label for="envio">Envío <span class="opcional">(opcional)</span></label>
+                        <select id="envio">
+                            <option value="" selected></option>
+                            <option value="Via">Via Cargo</option>
+                            <option value="Moto">Moto</option>
+                            <option value="Retiro">Retiro</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="campo" id="campo-direccion" style="display:none;">
+                    <label for="direccion-envio">Dirección / datos de envío <span class="opcional">(opcional)</span></label>
+                    <textarea id="direccion-envio" rows="4" placeholder="Via Cargo suele pedir todo esto (uno por línea):&#10;Nombre completo&#10;DNI&#10;Código postal&#10;Teléfono&#10;Email&#10;Dirección&#10;Referencia (color de casa, negocio cercano, etc.)"></textarea>
+                </div>
+
+                <!-- MODOS DE CARGA: cada uno elige el que le resulte más cómodo -->
+                <div class="tabs-carga">
+                    <button type="button" class="tab-carga-btn activo" data-tab-carga="tab-carga-rapida">⚡ Carga rápida</button>
+                    <button type="button" class="tab-carga-btn" data-tab-carga="tab-carga-manual">✍️ Carga manual</button>
+                </div>
+
+                <div id="tab-carga-rapida" class="tab-carga-contenido activo">
+                    <div class="bloque-carga-rapida">
+                        <div class="campo">
+                            <label for="texto-crudo">Pegar lista</label>
+                            <textarea id="texto-crudo" rows="6" placeholder="Ej:&#10;Mind beige (39/40) $35.000, x2&#10;Jordan low VERNIZ /AZUL (43) × 1 $48.000,00"></textarea>
+                        </div>
+                        <button type="button" id="btn-procesar-texto" class="btn btn-primario btn-ancho">⚡ Cargar lista automática</button>
+                        <p class="ayuda">El precio pegado se ignora: se calcula solo según el modelo, la cantidad de pares y si el cliente es del grupo. La forma de pago, estado, envío y dirección de arriba se aplican a toda la lista pegada.</p>
+                    </div>
+                </div>
+
+                <div id="tab-carga-manual" class="tab-carga-contenido">
+                    <div class="campo">
+                        <label for="modelo">Modelo (zapas o indumentaria)</label>
+                        <input type="text" id="modelo" list="opciones-modelos" autocomplete="off">
+                        <datalist id="opciones-modelos"></datalist>
+                    </div>
+
+                    <div class="fila-2">
+                        <div class="campo">
+                            <label for="talle">Talle</label>
+                            <input type="text" id="talle" list="opciones-talles" autocomplete="off">
+                            <datalist id="opciones-talles"></datalist>
+                        </div>
+                        <div class="campo">
+                            <label for="cantidad">Cantidad</label>
+                            <input type="number" id="cantidad" min="1" step="1" value="1">
+                        </div>
+                    </div>
+
+                    <div class="campo">
+                        <label for="precio-manual">Precio manual <span class="opcional">(opcional, se calcula solo)</span></label>
+                        <input type="number" id="precio-manual" min="0" step="1" placeholder="Automático...">
+                    </div>
+
+                    <div class="campo">
+                        <label for="pago-monto">Pago <span class="opcional">(opcional)</span></label>
+                        <input type="text" id="pago-monto" inputmode="decimal" placeholder="10000, 50%, total, o &quot;.&quot; para saldar todo">
+                    </div>
+
+                    <button type="submit" class="btn btn-exito btn-ancho">Agregar pedido</button>
+                </div>
+            </form>
+
+            <div class="acciones-exportar">
+                <button id="btn-excel" class="btn btn-verde-oscuro">📊 Excel</button>
+                <button id="btn-imagen" class="btn btn-primario">🖼️ Imagen p/depósito</button>
+            </div>
+        </aside>
+
+        <!-- COLUMNA DERECHA -->
+        <div class="panel-principal">
+
+            <div class="card card-tabla">
+                <div class="card-header">
+                    <h2 class="card-titulo">Lista de pedidos</h2>
+                    <div class="card-header-acciones">
+                        <button id="btn-deshacer" class="btn btn-warning" style="display:none;" title="Deshacer el último borrado">↩️ Deshacer</button>
+                        <button id="btn-borrar-todo" class="btn-icono" title="Borrar todos los pedidos">🗑️</button>
+                    </div>
+                </div>
+
+                <div class="buscador-tabla">
+                    <input type="search" id="buscador-lista" placeholder="🔎 Buscar por cliente o modelo...">
+                </div>
+
+                <div class="tabla-scroll">
+                    <table id="tabla-pedidos">
+                        <thead>
+                            <tr>
+                                <th>Cliente</th>
+                                <th>Modelo</th>
+                                <th>Talle</th>
+                                <th>Cant.</th>
+                                <th>Forma de pago</th>
+                                <th class="columna-icono">Estado</th>
+                                <th class="columna-icono">Envío</th>
+                                <th class="columna-privada">Precio<br>unit.</th>
+                                <th class="columna-privada">Importe</th>
+                                <th class="columna-privada">Pago</th>
+                                <th class="columna-privada">Saldo</th>
+                                <th class="columna-accion"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="lista-pedidos-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- RESUMEN: tarjetas KPI -->
+            <div class="card">
+                <div class="card-header-simple">
+                    <h2 class="card-titulo">Resumen</h2>
+                    <button type="button" id="btn-toggle-resumen" class="btn-mini" title="Mostrar/ocultar detalle por cliente">▲ Ocultar detalle</button>
+                </div>
+                <div class="kpis">
+                    <div class="kpi kpi-neutro">
+                        <span class="kpi-valor" id="total-pedidos">0</span>
+                        <span class="kpi-etiqueta">Pares confirmados</span>
+                    </div>
+                    <div class="kpi kpi-info">
+                        <span class="kpi-valor" id="total-facturado">$0</span>
+                        <span class="kpi-etiqueta">Total facturado</span>
+                    </div>
+                    <div class="kpi kpi-exito">
+                        <span class="kpi-valor" id="total-cobrado">$0</span>
+                        <span class="kpi-etiqueta">Ya cobrado</span>
+                    </div>
+                    <div class="kpi kpi-peligro">
+                        <span class="kpi-valor" id="total-pendiente">$0</span>
+                        <span class="kpi-etiqueta">Pendiente de cobro</span>
+                    </div>
+                </div>
+                <ul id="lista-resumen-clientes" class="lista-limpia"></ul>
+            </div>
+
+            <div class="fila-cards-chicas">
+                <div class="card">
+                    <div class="card-header-simple">
+                        <h2 class="card-titulo">Logística 🚚</h2>
+                        <button type="button" id="btn-copiar-direcciones" class="btn-mini" title="Copiar todas las direcciones cargadas">📋 Copiar</button>
+                    </div>
+                    <ul id="lista-envios-clientes" class="lista-limpia"></ul>
+                    <div class="direcciones-pendientes-bloque">
+                        <h3 class="subtitulo-chico">📍 Direcciones de envío (Via/Moto)</h3>
+                        <ul id="lista-direcciones-pendientes" class="lista-limpia"></ul>
+                    </div>
+                </div>
+                <div class="card">
+                    <h2 class="card-titulo">Deudores 💰</h2>
+                    <ul id="lista-deudores" class="lista-limpia"></ul>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- VISTA ESTADÍSTICAS: mismo nivel que las listas, no escondida en
+         Configuración. Solo la lista principal (Zapatillas) registra datos
+         acá — las demás listas que se creen no suman estadísticas. -->
+    <div id="vista-estadisticas" class="layout layout-estadisticas" style="display:none;">
+        <div class="panel-principal" style="grid-column: 1 / -1;">
+
+            <div class="card">
+                <div class="card-header-simple">
+                    <h2 class="card-titulo">📊 Estadísticas — Zapatillas</h2>
+                </div>
+                <p class="ayuda">Cada vez que usás "🗑️ Borrar todos los pedidos" <strong>en la lista Zapatillas</strong> queda un "cierre" nuevo con esa fecha, lo facturado y qué modelos se vendieron. Las demás listas que crees no generan estadísticas. Es facturación BRUTA (lo que en teoría deberías tener si todos pagan), no lo efectivamente cobrado — los "Cambio" de talle no cuentan como venta de un modelo.</p>
+            </div>
+
+            <div id="estadisticas-cuerpo-pro"><p class="ayuda">Cargando...</p></div>
+
+        </div>
+    </div>
+
+    <!-- MODAL DE CONFIGURACIÓN -->
+    <div id="modal-config" class="modal-fondo" style="display:none;">
+        <div class="modal-caja">
+            <div class="modal-header">
+                <h2>⚙️ Configuración de precios y clientes</h2>
+                <button id="btn-cerrar-config" class="btn-icono" aria-label="Cerrar">✕</button>
+            </div>
+
+            <div class="tabs-config">
+                <button class="tab-btn activo" data-tab="tab-categorias">Categorías y precios</button>
+                <button class="tab-btn" data-tab="tab-general">General</button>
+                <button class="tab-btn" data-tab="tab-clientes">Clientes</button>
+            </div>
+
+            <div class="modal-cuerpo">
+                <div id="tab-categorias" class="tab-contenido activo">
+                    <div class="ayuda-categorias">
+                        <p class="ayuda">Cada <strong>categoría</strong> es un modelo o grupo de modelos (ej: "Jordan low pink"). Si el modelo que cargás contiene alguna de sus <strong>palabras clave</strong>, se le aplica ese precio — no hace falta ordenar nada: si coincide con varias categorías, gana sola la más específica (la de la palabra más larga).</p>
+                    </div>
+                    <button id="btn-agregar-categoria" type="button" class="btn-agregar-regla">+ Agregar categoría</button>
+                    <div id="lista-categorias"></div>
+                    <button id="btn-guardar-categorias" type="button" class="btn-guardar-config">💾 Guardar cambios</button>
+                </div>
+
+                <div id="tab-general" class="tab-contenido">
+                    <div class="campo campo-chico">
+                        <label for="input-recargo-cambio">Recargo por cambio de talle ($)</label>
+                        <input type="number" id="input-recargo-cambio" min="0" step="500">
+                    </div>
+
+                    <p class="ayuda" style="margin-top:16px;">Precio que se usa cuando un modelo no coincide con <strong>ninguna</strong> categoría de la lista:</p>
+                    <div class="grid-precios-default">
+                        <div class="campo campo-chico">
+                            <label for="input-default-minorista-unidad">Minorista · menos de 5</label>
+                            <input type="number" id="input-default-minorista-unidad" min="0" step="500">
+                        </div>
+                        <div class="campo campo-chico">
+                            <label for="input-default-minorista-mayor">Minorista · 5 o más</label>
+                            <input type="number" id="input-default-minorista-mayor" min="0" step="500">
+                        </div>
+                        <div class="campo campo-chico">
+                            <label for="input-default-mayorista-unidad">Mayorista · menos de 5</label>
+                            <input type="number" id="input-default-mayorista-unidad" min="0" step="500">
+                        </div>
+                        <div class="campo campo-chico">
+                            <label for="input-default-mayorista-mayor">Mayorista · 5 o más</label>
+                            <input type="number" id="input-default-mayorista-mayor" min="0" step="500">
+                        </div>
+                    </div>
+
+                    <button id="btn-guardar-general" class="btn btn-exito" style="margin-top:14px;">Guardar</button>
+                    <hr class="divisor">
+                    <button id="btn-restablecer-precios" class="btn btn-outline btn-peligro">Restablecer todos los precios a los valores por defecto</button>
+                </div>
+
+                <div id="tab-clientes" class="tab-contenido">
+                    <p class="ayuda">Esta es tu lista de revendedores (grupo, precio mayorista) — se arma sola cuando tildás "Es del grupo" al cargar un pedido, así se recuerda la próxima vez. Los clientes minoristas comunes no se guardan acá. Podés editar el nombre o sacar a alguien de la lista.</p>
+                    <div id="lista-clientes-config"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase (opcional: si no está configurado, la app usa localStorage) -->
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+
+    <script src="firebase-config.js"></script>
+    <script src="pricing.js"></script>
+    <script src="store.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
