@@ -330,7 +330,12 @@ function parsearTextoPedido(texto) {
         nombreLimpio = nombreLimpio.replace(/[x×]\s*\d+/gi, '');
         nombreLimpio = nombreLimpio.replace(/\(\s*\d{1,3}(?:[.,]5)?\s*(?:\/\s*\d{1,3}(?:[.,]5)?\s*)?\)/g, '');
         nombreLimpio = nombreLimpio.replace(/[\/\\]/g, ' ');
-        nombreLimpio = nombreLimpio.replace(/[-\–\—\.\,\:\;]+$/g, '');
+        // Incluye los espacios en la misma limpieza final (no solo la
+        // puntuación): si el precio venía seguido de ", x2" (coma antes de
+        // la cantidad), sacar el precio y la cantidad por separado dejaba
+        // una coma "huérfana" con un espacio después ("Mind beige , "), y
+        // esa coma no quedaba al final del todo — no se limpiaba.
+        nombreLimpio = nombreLimpio.replace(/[\s,;:\-–—.]+$/g, '');
         nombreLimpio = nombreLimpio.replace(/\s+/g, ' ').trim();
         if (!nombreLimpio) return;
 
