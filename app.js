@@ -1239,8 +1239,13 @@ document.getElementById('btn-imagen').addEventListener('click', () => {
     // antes de notarse. Se usa la escala más alta posible sin pasarse del
     // límite de tamaño de canvas que soportan los navegadores (si la lista
     // es muy larga, se baja la escala lo justo para no romper la foto).
+    // El límite anterior (14000px) era mucho más conservador de lo
+    // necesario: con 67 pedidos cargados ya lo superaba y bajaba la nitidez
+    // de la foto sin hacer falta — los navegadores soportan canvases bastante
+    // más grandes que eso. Se sube a 28000px, que deja lugar para el doble
+    // de pedidos (unos 130+) antes de necesitar bajar la escala.
     const alturaTablaCss = tabla.getBoundingClientRect().height;
-    const alturaMaximaSegura = 14000;
+    const alturaMaximaSegura = 28000;
     const escala = Math.max(2, Math.min(4, alturaMaximaSegura / alturaTablaCss));
 
     // Dos frames de margen para que el navegador termine de repintar en claro
