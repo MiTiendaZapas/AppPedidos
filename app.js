@@ -625,27 +625,34 @@ document.getElementById('btn-borrar-todo').addEventListener('click', () => {
     const ok = confirm(`⚠️ ¿Estás seguro de que querés ELIMINAR TODOS los pedidos (${pedidos.length})? Tanto vos como tu socio van a poder deshacer esta acción durante unos segundos.`);
     if (!ok) return;
 
-    // Solo la lista principal (Zapatillas) archiva estadísticas.
-    if (listaActivaId === PRINCIPAL_LISTA_ID) registrarEstadisticasDeLista(pedidos);
+    // Borrar la lista YA NO archiva estadísticas solo — quedó separado a
+    // propósito (ver btn-cargar-estadisticas) para que un doble click acá
+    // nunca pueda duplicar un cierre.
     Store.deleteAllPedidos(pedidos).then(backup => Store.guardarRespaldoBorrado(listaActivaId, backup));
 });
 
-// Antes de borrar, se archiva un "cierre de lista": un registro nuevo con
-// esa fecha, cuánto se facturó y qué modelos se vendieron. Nunca se pisa ni
-// se resume de antemano — cada "Borrar todo" queda con su propio registro
-// para siempre, y el resumen del mes (Configuración > Estadísticas) se
-// calcula sumando los cierres de ese mes. Es facturación BRUTA ("lo que en
-// teoría tendrías si todos pagan"): no distingue cobrado de pendiente, y no
-// cuenta los "Cambio" de talle como venta de un modelo.
-function registrarEstadisticasDeLista(lista) {
+// ----------------------------------------------------------------------------
+// CARGAR A ESTADÍSTICAS (a propósito, un botón aparte de "Borrar todo" — un
+// doble click accidental en Borrar todo llegó a archivar el mismo cierre dos
+// veces. Ahora es una acción explícita, que además se puede hacer ANTES de
+// borrar, sin tener que borrar para que quede archivado.)
+// ----------------------------------------------------------------------------
+// Archiva un "cierre de lista": un registro nuevo con esa fecha, cuánto se
+// facturó y qué modelos se vendieron. Nunca se pisa ni se resume de
+// antemano — cada cierre queda con su propio registro para siempre, y el
+// resumen del mes (Estadísticas) se calcula sumando los cierres de ese mes.
+// Es facturación BRUTA ("lo que en teoría tendrías si todos pagan"): no
+// distingue cobrado de pendiente, y no cuenta los "Cambio" de talle como
+// venta de un modelo. Devuelve true si de verdad archivó algo.
+async function registrarEstadisticasDeLista(lista) {
     const confirmados = lista.filter(p => p.estado === '✅');
-    if (confirmados.length === 0) return;
+    if (confirmados.length === 0) return false;
 
     const ahora = new Date();
     const facturacion = confirmados.reduce((s, p) => s + deudaDeLinea(p), 0);
     const paresVendidos = confirmados.filter(p => p.pago !== 'Cambio');
     const cantidadPares = paresVendidos.reduce((s, p) => s + (parseInt(p.cantidad) || 0), 0);
-    if (facturacion <= 0 && cantidadPares === 0) return;
+    if (facturacion <= 0 && cantidadPares === 0) return false;
 
     const modelosVendidos = {};
     paresVendidos.forEach(p => {
@@ -655,7 +662,7 @@ function registrarEstadisticasDeLista(lista) {
         modelosVendidos[nombreModelo] = (modelosVendidos[nombreModelo] || 0) + cantidad;
     });
 
-    Store.registrarCierre({
+    await Store.registrarCierre({
         mes: idMes(ahora),
         fecha: ahora.toISOString().slice(0, 10),
         facturacion,
@@ -663,7 +670,21 @@ function registrarEstadisticasDeLista(lista) {
         cantidadPares,
         modelosVendidos,
     });
+    return true;
 }
+
+document.getElementById('btn-cargar-estadisticas').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-cargar-estadisticas');
+    if (btn.disabled) return; // por si alguien lo aprieta dos veces rápido
+    if (pedidos.length === 0) { alert('La lista está vacía, no hay nada para cargar a Estadísticas.'); return; }
+
+    btn.disabled = true;
+    const textoOriginal = btn.textContent;
+    btn.textContent = 'Cargando...';
+    const seArchivo = await registrarEstadisticasDeLista(pedidos);
+    btn.textContent = seArchivo ? '✅ Cargado a Estadísticas' : 'Nada para cargar (sin pedidos ✅)';
+    setTimeout(() => { btn.textContent = textoOriginal; btn.disabled = false; }, 2200);
+});
 
 // Se llama con el respaldo compartido cada vez que cambia (aparece uno nuevo,
 // o se borra al deshacer / vencerse la ventana de tiempo).
@@ -729,6 +750,11 @@ function renderizarTabsListas() {
     });
 
     btnEstadisticas.classList.toggle('activo', vistaActiva === 'estadisticas');
+
+    // Solo la lista principal (Zapatillas) archiva estadísticas — en las
+    // demás listas el botón ni se muestra.
+    const btnCargarEstadisticas = document.getElementById('btn-cargar-estadisticas');
+    if (btnCargarEstadisticas) btnCargarEstadisticas.style.display = (listaActivaId === PRINCIPAL_LISTA_ID) ? '' : 'none';
 }
 
 function cambiarListaActiva(id) {
