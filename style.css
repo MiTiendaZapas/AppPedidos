@@ -495,6 +495,18 @@ body[data-theme="dark"] .badge-warning { color: var(--warning); }
 .barra-dia .barra { width: 22px; background: var(--primary); border-radius: 5px 5px 0 0; min-height: 3px; }
 .barra-dia .barra-etiqueta { font-size: 10.5px; color: var(--text-faint); margin-top: 6px; white-space: nowrap; }
 
+/* Tabla "Ventas por día": cada fila se puede tocar para desplegar el top de
+   modelos vendidos ESE día en particular (misma idea que el click-para-ver-
+   detalle que ya usa Resumen con cada cliente). */
+.fila-dia-clickeable { cursor: pointer; }
+.fila-dia-clickeable:hover td { background: var(--primary-bg); }
+.fila-detalle-dia { display: none; }
+.fila-detalle-dia.abierta { display: table-row; }
+.fila-detalle-dia td { text-align: left; background: var(--surface-alt); padding: 10px 14px; white-space: normal; }
+.lista-top-dia { list-style: none; padding: 0; margin: 8px 0 0; counter-reset: topdia; }
+.lista-top-dia li { counter-increment: topdia; padding: 4px 0; font-size: 12.5px; font-weight: 600; }
+.lista-top-dia li::before { content: counter(topdia) "º "; color: var(--text-faint); font-weight: 700; margin-right: 2px; }
+
 /* ============================================================================
    RESPONSIVE
    ============================================================================ */

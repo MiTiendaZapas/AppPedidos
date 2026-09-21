@@ -1691,7 +1691,7 @@ function renderizarMesEstadisticasPro(titulo, cierresSinOrdenar) {
 
     let facturacionTotal = 0, paresTotal = 0;
     const modelosTotal = {};
-    const porDia = {}; // fecha -> {pares, facturacion}
+    const porDia = {}; // fecha -> {pares, facturacion, cantidadPedidos, modelos: {nombre: cantidad}}
     cierres.forEach(c => {
         const fact = parseFloat(c.facturacion) || 0;
         const pares = parseFloat(c.cantidadPares) || 0;
@@ -1700,15 +1700,28 @@ function renderizarMesEstadisticasPro(titulo, cierresSinOrdenar) {
         Object.entries(c.modelosVendidos || {}).forEach(([nombre, cantidad]) => {
             modelosTotal[nombre] = (modelosTotal[nombre] || 0) + (parseFloat(cantidad) || 0);
         });
-        if (!porDia[c.fecha]) porDia[c.fecha] = { pares: 0, facturacion: 0 };
+        if (!porDia[c.fecha]) porDia[c.fecha] = { pares: 0, facturacion: 0, cantidadPedidos: 0, modelos: {} };
         porDia[c.fecha].pares += pares;
         porDia[c.fecha].facturacion += fact;
+        porDia[c.fecha].cantidadPedidos += (parseFloat(c.cantidadPedidos) || 0);
+        Object.entries(c.modelosVendidos || {}).forEach(([nombre, cantidad]) => {
+            porDia[c.fecha].modelos[nombre] = (porDia[c.fecha].modelos[nombre] || 0) + (parseFloat(cantidad) || 0);
+        });
     });
 
     const ranking = Object.entries(modelosTotal).map(([nombre, cantidad]) => ({ nombre, cantidad })).sort((a, b) => b.cantidad - a.cantidad);
     const dias = Object.entries(porDia).sort((a, b) => a[0].localeCompare(b[0]));
     const maxParesDia = Math.max(1, ...dias.map(([, d]) => d.pares));
     const promedioPorCierre = cierres.length > 0 ? facturacionTotal / cierres.length : 0;
+
+    // Top de modelos DE ESE DÍA en particular (no del mes entero) — junta los
+    // modelos de todos los cierres que haya ese día, por si hubo más de uno.
+    function topModelosDelDia(mapaModelos, cantidad) {
+        return Object.entries(mapaModelos)
+            .map(([nombre, cant]) => ({ nombre, cantidad: cant }))
+            .sort((a, b) => b.cantidad - a.cantidad)
+            .slice(0, cantidad);
+    }
 
     return `
     <div class="card bloque-estadisticas-mes">
@@ -1743,24 +1756,43 @@ function renderizarMesEstadisticasPro(titulo, cierresSinOrdenar) {
         </table>
         </div>`}
 
-        <h4 class="subtitulo-chico" style="margin-top:18px;">Cierres de lista (día por día)</h4>
-        ${cierres.length === 0 ? '<p class="vacio">Sin cierres registrados.</p>' : `
+        <h4 class="subtitulo-chico" style="margin-top:18px;">Ventas por día <span class="opcional">(tocá un día para ver su top)</span></h4>
+        ${dias.length === 0 ? '<p class="vacio">Sin cierres registrados.</p>' : `
         <div class="tabla-scroll">
         <table class="tabla-estadisticas">
             <thead><tr><th>Fecha</th><th>Pedidos</th><th>Pares</th><th>Facturación</th></tr></thead>
             <tbody>
-                ${cierres.slice().reverse().map(c => `
-                    <tr>
-                        <td>${formatoFechaLegible(c.fecha)}</td>
-                        <td>${c.cantidadPedidos || 0}</td>
-                        <td>${c.cantidadPares || 0}</td>
-                        <td>${formatoPesos(c.facturacion)}</td>
-                    </tr>`).join('')}
+                ${dias.slice().reverse().map(([fecha, d]) => {
+                    const idDetalle = `detalle-dia-${fecha}`;
+                    const top = topModelosDelDia(d.modelos, 5);
+                    return `
+                    <tr class="fila-dia-clickeable" onclick="toggleDetalleDia('${idDetalle}')">
+                        <td>${formatoFechaLegible(fecha)}</td>
+                        <td>${d.cantidadPedidos}</td>
+                        <td>${d.pares}</td>
+                        <td>${formatoPesos(d.facturacion)}</td>
+                    </tr>
+                    <tr id="${idDetalle}" class="fila-detalle-dia">
+                        <td colspan="4">
+                            <strong>Top del ${formatoFechaLegible(fecha)}:</strong>
+                            ${top.length === 0 ? '<p class="vacio">Sin modelos registrados.</p>' : `
+                            <ol class="lista-top-dia">
+                                ${top.map(m => `<li>${m.nombre} <span class="badge-cantidad">×${m.cantidad}</span></li>`).join('')}
+                            </ol>`}
+                        </td>
+                    </tr>`;
+                }).join('')}
             </tbody>
         </table>
         </div>`}
     </div>`;
 }
+
+window.toggleDetalleDia = function (id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.toggle('abierta');
+};
 
 // ----------------------------------------------------------------------------
 // INDICADOR DE CONEXIÓN (avisa también si se cortó el internet)
