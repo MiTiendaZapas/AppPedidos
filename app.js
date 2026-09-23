@@ -11,6 +11,8 @@ let listasCache = {};       // id de lista -> { nombre, esPrincipal, creadaEn }
 let listaActivaId = PRINCIPAL_LISTA_ID;
 let vistaActiva = 'listas'; // 'listas' | 'estadisticas'
 let unsubRespaldoBorrado = null; // se re-suscribe cada vez que se cambia de lista
+let unsubEstadisticasCargadas = null; // ídem, para el botón "Cargar a Estadísticas"
+let estadisticasYaCargadas = false; // estado compartido actual (para leerlo sin esperar el próximo snapshot)
 
 let clientesCache = {};     // id normalizado -> { nombre, esGrupo }
 let precioConfig = null;    // reglas de precio (ver pricing.js) — compartidas por todas las listas
@@ -339,7 +341,7 @@ function parsearTextoPedido(texto) {
         nombreLimpio = nombreLimpio.replace(/\s+/g, ' ').trim();
         if (!nombreLimpio) return;
 
-        resultado.push({ modelo: nombreLimpio, talle: talle.toString(), cantidad });
+        resultado.push({ modelo: nombreLimpio, talle: talle.toString(), cantidad, precioPegado: precioInfo ? precioInfo.valor : null });
     });
     return resultado;
 }
@@ -376,26 +378,44 @@ document.getElementById('btn-procesar-texto').addEventListener('click', () => {
     const envioSel = document.getElementById('envio').value;
     const direccionSel = (envioSel === 'Via' || envioSel === 'Moto') ? direccionInput.value.trim() : '';
     const esCambio = pagoSel === 'Cambio';
+    const usarPrecioPegado = document.getElementById('usar-precio-pegado').checked;
 
-    const promesas = lineasParseadas.map(l => {
-        // Un cambio de talle no es una venta: sin precio unitario ni importe,
-        // solo el recargo (que ya suma deudaDeLinea sobre el Saldo).
-        const datosPrecio = esCambio
-            ? { precioUnitario: 0, importe: 0, categoria: 'Cambio de talle', tipo: clasificarTipo(precioConfig, l.modelo) }
-            : (() => { const r = calcularParaLinea(cliente, l.modelo, draftTodas); return { precioUnitario: r.precio, importe: importeDeLinea(r.precio, l.cantidad), categoria: r.categoria, tipo: r.tipo }; })();
-        return Store.addPedido({
-            cliente, modelo: l.modelo, talle: l.talle, cantidad: l.cantidad,
-            ...datosPrecio, manualPrecio: false,
-            pagoMonto: '',
-            pago: pagoSel, estado: estadoSel, envio: envioSel, direccion: direccionSel,
-            listaId: listaActivaId,
-        });
+    const promesas = [];
+    lineasParseadas.forEach(l => {
+        let datosPrecio;
+        if (esCambio) {
+            // Un cambio de talle no es una venta: sin precio unitario ni
+            // importe, solo el recargo (que ya suma deudaDeLinea sobre el Saldo).
+            datosPrecio = { precioUnitario: 0, categoria: 'Cambio de talle', tipo: clasificarTipo(precioConfig, l.modelo), manualPrecio: false };
+        } else if (usarPrecioPegado && l.precioPegado !== null) {
+            // Se pidió respetar el precio tal cual está escrito en el texto
+            // (y esta línea sí trae uno) — no se recalcula automático.
+            datosPrecio = { precioUnitario: l.precioPegado, categoria: 'Manual', tipo: clasificarTipo(precioConfig, l.modelo), manualPrecio: true };
+        } else {
+            // Automático: si se tildó "usar precio pegado" pero esta línea en
+            // particular no traía ningún precio, cae acá igual.
+            const r = calcularParaLinea(cliente, l.modelo, draftTodas);
+            datosPrecio = { precioUnitario: r.precio, categoria: r.categoria, tipo: r.tipo, manualPrecio: false };
+        }
+        // Un pedido por PAR, no uno solo con cantidad acumulada: si pegaron
+        // "x2", se cargan 2 filas iguales (cada una cantidad 1) en vez de una
+        // fila con cantidad 2 — así cada par se ve, se edita y se borra por
+        // separado en la lista.
+        for (let i = 0; i < l.cantidad; i++) {
+            promesas.push(Store.addPedido({
+                cliente, modelo: l.modelo, talle: l.talle, cantidad: 1,
+                ...datosPrecio, importe: datosPrecio.precioUnitario,
+                pagoMonto: '',
+                pago: pagoSel, estado: estadoSel, envio: envioSel, direccion: direccionSel,
+                listaId: listaActivaId,
+            }));
+        }
     });
 
     Promise.all(promesas).then(() => {
         recomputarPreciosCliente(cliente, []);
         document.getElementById('texto-crudo').value = '';
-        alert(`✅ Se agregaron ${lineasParseadas.length} línea(s) a nombre de ${cliente}.`);
+        alert(`✅ Se agregaron ${promesas.length} par(es) a nombre de ${cliente}.`);
     });
 });
 
@@ -467,10 +487,8 @@ pedidoForm.addEventListener('submit', (e) => {
     }
 
     const envioVal = document.getElementById('envio').value;
-    const nuevoPedido = {
-        cliente, modelo, talle, cantidad,
-        precioUnitario, importe, manualPrecio, categoria, tipo,
-        pagoMonto,
+    const datosComunes = {
+        cliente, modelo, talle, manualPrecio, categoria, tipo,
         pago,
         estado: document.getElementById('estado').value,
         envio: envioVal,
@@ -478,7 +496,27 @@ pedidoForm.addEventListener('submit', (e) => {
         listaId: listaActivaId,
     };
 
-    Store.addPedido(nuevoPedido).then(() => {
+    // Un pedido por PAR: si "Cantidad" es 2, se cargan 2 filas iguales (cada
+    // una cantidad 1) en vez de una fila con cantidad 2 — así cada par se ve,
+    // se edita y se borra por separado. Un "Cambio" de talle es una sola
+    // gestión (con un recargo fijo, no por cantidad), así que ese sí queda
+    // en una única fila con la cantidad que se haya puesto.
+    let promesaCreacion;
+    if (esCambio || cantidad <= 1) {
+        promesaCreacion = Store.addPedido({ ...datosComunes, cantidad, precioUnitario, importe, pagoMonto });
+    } else {
+        // El pago tipeado (monto fijo, %, "." o "total") se reparte en
+        // partes iguales entre los pares creados, para que la suma siga
+        // siendo la misma plata que si hubiera quedado en una sola fila.
+        const pagoMontoPorPar = (pagoMonto === '' || pagoMonto === null) ? '' : (parseFloat(pagoMonto) / cantidad).toString();
+        const promesas = [];
+        for (let i = 0; i < cantidad; i++) {
+            promesas.push(Store.addPedido({ ...datosComunes, cantidad: 1, precioUnitario, importe: precioUnitario, pagoMonto: pagoMontoPorPar }));
+        }
+        promesaCreacion = Promise.all(promesas);
+    }
+
+    promesaCreacion.then(() => {
         recomputarPreciosCliente(cliente, []);
         if (pagoMontoRaw === '.') marcarClienteComoSaldado(cliente);
     });
@@ -498,15 +536,6 @@ window.guardarEdicion = function (id, campo, elemento) {
     const pedido = pedidos.find(p => p.id === id);
     if (!pedido) return;
     let nuevoValor = elemento.innerText.trim();
-
-    if (campo === 'cantidad') {
-        const n = Math.max(parseInt(nuevoValor) || 1, 1);
-        if (n === pedido.cantidad) return;
-        const nuevoImporte = pedido.manualPrecio ? importeDeLinea(pedido.precioUnitario, n) : pedido.importe;
-        Store.updatePedido(id, pedido.manualPrecio ? { cantidad: n, importe: nuevoImporte } : { cantidad: n })
-            .then(() => recomputarPreciosCliente(pedido.cliente, []));
-        return;
-    }
 
     if (campo === 'precioUnitario') {
         const limpio = nuevoValor.replace(/[\$¢\s]/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.');
@@ -627,8 +656,12 @@ document.getElementById('btn-borrar-todo').addEventListener('click', () => {
 
     // Borrar la lista YA NO archiva estadísticas solo — quedó separado a
     // propósito (ver btn-cargar-estadisticas) para que un doble click acá
-    // nunca pueda duplicar un cierre.
-    Store.deleteAllPedidos(pedidos).then(backup => Store.guardarRespaldoBorrado(listaActivaId, backup));
+    // nunca pueda duplicar un cierre. Acá solo se destraba el botón de
+    // "Cargar a Estadísticas" (si estaba bloqueado), para la próxima tanda.
+    Store.deleteAllPedidos(pedidos).then(backup => {
+        Store.guardarRespaldoBorrado(listaActivaId, backup);
+        if (listaActivaId === PRINCIPAL_LISTA_ID) Store.marcarEstadisticasCargadas(listaActivaId, false);
+    });
 });
 
 // ----------------------------------------------------------------------------
@@ -673,17 +706,38 @@ async function registrarEstadisticasDeLista(lista) {
     return true;
 }
 
+// Refleja el estado COMPARTIDO (entre las dos computadoras) de si esta
+// tanda de pedidos ya se cargó a Estadísticas. Mientras está trabado, nadie
+// puede volver a archivar la misma lista sin pasar antes por "Borrar todo" —
+// así fue como terminamos con cierres duplicados/superpuestos.
+function actualizarBotonCargarEstadisticas(cargado) {
+    estadisticasYaCargadas = cargado;
+    const btn = document.getElementById('btn-cargar-estadisticas');
+    if (!btn || btn.dataset.procesando === '1') return; // no pisar el "✅ Cargado" momentáneo
+    if (cargado) {
+        btn.disabled = true;
+        btn.textContent = '✅ Ya cargado (borrá todo para la próxima)';
+    } else {
+        btn.disabled = false;
+        btn.textContent = '📊 Cargar a Estadísticas';
+    }
+}
+
 document.getElementById('btn-cargar-estadisticas').addEventListener('click', async () => {
     const btn = document.getElementById('btn-cargar-estadisticas');
-    if (btn.disabled) return; // por si alguien lo aprieta dos veces rápido
+    if (btn.disabled) return; // ya está cargado, o procesando un click anterior
     if (pedidos.length === 0) { alert('La lista está vacía, no hay nada para cargar a Estadísticas.'); return; }
 
     btn.disabled = true;
-    const textoOriginal = btn.textContent;
+    btn.dataset.procesando = '1';
     btn.textContent = 'Cargando...';
     const seArchivo = await registrarEstadisticasDeLista(pedidos);
+    if (seArchivo) await Store.marcarEstadisticasCargadas(listaActivaId, true);
     btn.textContent = seArchivo ? '✅ Cargado a Estadísticas' : 'Nada para cargar (sin pedidos ✅)';
-    setTimeout(() => { btn.textContent = textoOriginal; btn.disabled = false; }, 2200);
+    setTimeout(() => {
+        delete btn.dataset.procesando;
+        actualizarBotonCargarEstadisticas(estadisticasYaCargadas); // aplica el estado real ya compartido
+    }, 2200);
 });
 
 // Se llama con el respaldo compartido cada vez que cambia (aparece uno nuevo,
@@ -713,6 +767,11 @@ document.getElementById('btn-deshacer').addEventListener('click', () => {
 function suscribirRespaldoDeListaActiva() {
     if (unsubRespaldoBorrado) unsubRespaldoBorrado();
     unsubRespaldoBorrado = Store.onRespaldoBorrado(listaActivaId, actualizarBotonDeshacer);
+}
+
+function suscribirEstadisticasCargadasDeListaActiva() {
+    if (unsubEstadisticasCargadas) unsubEstadisticasCargadas();
+    unsubEstadisticasCargadas = Store.onEstadisticasCargadas(listaActivaId, actualizarBotonCargarEstadisticas);
 }
 
 // ----------------------------------------------------------------------------
@@ -762,6 +821,7 @@ function cambiarListaActiva(id) {
     try { localStorage.setItem(CLAVE_LISTA_ACTIVA, id); } catch (e) { /* localStorage bloqueado */ }
     recalcularPedidosActivos();
     suscribirRespaldoDeListaActiva();
+    suscribirEstadisticasCargadasDeListaActiva();
     mostrarVistaListas();
 }
 
@@ -1148,7 +1208,7 @@ function renderizarTabla() {
     }
 
     if (filtro && copia.length === 0) {
-        listaBody.innerHTML = `<tr><td colspan="12" class="vacio-fila">No se encontraron pedidos para "${filtroTexto}".</td></tr>`;
+        listaBody.innerHTML = `<tr><td colspan="11" class="vacio-fila">No se encontraron pedidos para "${filtroTexto}".</td></tr>`;
     }
 
     copia.forEach((pedido, indice) => {
@@ -1156,7 +1216,7 @@ function renderizarTabla() {
         if (indice === 0 || esGrupoActual !== esClienteGrupo(copia[indice - 1].cliente)) {
             const filaSeparador = document.createElement('tr');
             filaSeparador.className = 'fila-separador-grupo-tr';
-            filaSeparador.innerHTML = `<td colspan="12" class="fila-separador-grupo">${esGrupoActual ? '👥 Grupo / revendedores (mayorista)' : '🛍️ Clientes comunes (minorista)'}</td>`;
+            filaSeparador.innerHTML = `<td colspan="11" class="fila-separador-grupo">${esGrupoActual ? '👥 Grupo / revendedores (mayorista)' : '🛍️ Clientes comunes (minorista)'}</td>`;
             listaBody.appendChild(filaSeparador);
         }
 
@@ -1176,7 +1236,6 @@ function renderizarTabla() {
             <td contenteditable="true" class="celda-editable" onblur="guardarEdicion('${pedido.id}', 'cliente', this)">${pedido.cliente}</td>
             <td contenteditable="true" class="celda-editable" onblur="guardarEdicion('${pedido.id}', 'modelo', this)" title="${pedido.categoria || ''}">${pedido.modelo}</td>
             <td contenteditable="true" class="celda-editable" onblur="guardarEdicion('${pedido.id}', 'talle', this)">${pedido.talle}</td>
-            <td contenteditable="true" class="celda-editable celda-centro" onblur="guardarEdicion('${pedido.id}', 'cantidad', this)">${pedido.cantidad || 1}</td>
             <td><span class="texto-clickable" onclick="alternarPago('${pedido.id}')">${badgePago(pedido.pago)}</span></td>
             <td class="columna-icono"><span class="texto-clickable" onclick="alternarEstado('${pedido.id}')">${badgeEstado(pedido.estado)}</span></td>
             <td class="columna-icono"><span class="texto-clickable" onclick="alternarEnvio('${pedido.id}')">${badgeEnvio(pedido.envio)}</span></td>
@@ -1836,6 +1895,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try { listaActivaId = localStorage.getItem(CLAVE_LISTA_ACTIVA) || PRINCIPAL_LISTA_ID; } catch (e) { /* localStorage bloqueado */ }
         suscribirRespaldoDeListaActiva();
+        suscribirEstadisticasCargadasDeListaActiva();
 
         let yaSeSembroListaPrincipal = false;
         Store.onListas(obj => {
@@ -1851,6 +1911,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 try { localStorage.setItem(CLAVE_LISTA_ACTIVA, listaActivaId); } catch (e) { /* localStorage bloqueado */ }
                 recalcularPedidosActivos();
                 suscribirRespaldoDeListaActiva();
+                suscribirEstadisticasCargadasDeListaActiva();
             }
             renderizarTabsListas();
         });

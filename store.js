@@ -63,7 +63,7 @@ const Store = (function () {
     }
 
     // ---- helpers localStorage ------------------------------------------------
-    const LS_KEYS = { pedidos: 'ap_pedidos', clientes: 'ap_clientes', config: 'ap_config', respaldo: 'ap_respaldo_borrado', cierres: 'ap_cierres', listas: 'ap_listas' };
+    const LS_KEYS = { pedidos: 'ap_pedidos', clientes: 'ap_clientes', config: 'ap_config', respaldo: 'ap_respaldo_borrado', cierres: 'ap_cierres', listas: 'ap_listas', estadisticasCargadas: 'ap_estadisticas_cargadas' };
 
     function lsGet(key, porDefecto) {
         try {
@@ -80,6 +80,7 @@ const Store = (function () {
     let configListenersLocal = [];
     let respaldoListenersLocal = [];
     let listasListenersLocal = [];
+    let estadisticasCargadasListenersLocal = [];
 
     function emitPedidosLocal() {
         const arr = lsGet(LS_KEYS.pedidos, []);
@@ -103,6 +104,10 @@ const Store = (function () {
         const obj = lsGet(LS_KEYS.listas, {});
         listasListenersLocal.forEach(cb => cb(obj));
     }
+    function emitEstadisticasCargadasLocal() {
+        const obj = lsGet(LS_KEYS.estadisticasCargadas, {});
+        estadisticasCargadasListenersLocal.forEach(cb => cb(obj));
+    }
 
     // Sincroniza entre pestañas del MISMO navegador (no entre computadoras).
     window.addEventListener('storage', (e) => {
@@ -111,6 +116,7 @@ const Store = (function () {
         if (e.key === LS_KEYS.config) emitConfigLocal();
         if (e.key === LS_KEYS.respaldo) emitRespaldoLocal();
         if (e.key === LS_KEYS.listas) emitListasLocal();
+        if (e.key === LS_KEYS.estadisticasCargadas) emitEstadisticasCargadasLocal();
     });
 
     function idLocalNuevo() {
@@ -240,6 +246,39 @@ const Store = (function () {
             delete todos[listaId];
             lsSet(LS_KEYS.respaldo, todos);
             emitRespaldoLocal();
+            return Promise.resolve();
+        }
+    }
+
+    // ---- API "YA SE CARGÓ A ESTADÍSTICAS" (para que no se pueda cargar dos
+    // veces la misma tanda de pedidos) ---------------------------------------
+    // Un documento por lista, compartido entre las dos computadoras: si
+    // alguien aprieta "Cargar a Estadísticas", el botón queda bloqueado en
+    // TODAS las pantallas hasta que se use "Borrar todo" — así nadie puede
+    // (sin querer, ni por olvidarse de que ya lo hizo el otro) volver a
+    // archivar la misma lista sin haberla vaciado antes.
+    function onEstadisticasCargadas(listaId, callback) {
+        if (modo === 'firebase') {
+            return db.collection('estadisticas_cargadas').doc(listaId).onSnapshot(
+                doc => callback(!!(doc.exists && doc.data().cargado)),
+                err => console.error('Error escuchando estado de estadísticas:', err)
+            );
+        } else {
+            const wrapped = (todos) => callback(!!(todos || {})[listaId]);
+            estadisticasCargadasListenersLocal.push(wrapped);
+            emitEstadisticasCargadasLocal();
+            return () => { estadisticasCargadasListenersLocal = estadisticasCargadasListenersLocal.filter(f => f !== wrapped); };
+        }
+    }
+
+    function marcarEstadisticasCargadas(listaId, valor) {
+        if (modo === 'firebase') {
+            return db.collection('estadisticas_cargadas').doc(listaId).set({ cargado: valor });
+        } else {
+            const todos = lsGet(LS_KEYS.estadisticasCargadas, {});
+            if (valor) todos[listaId] = true; else delete todos[listaId];
+            lsSet(LS_KEYS.estadisticasCargadas, todos);
+            emitEstadisticasCargadasLocal();
             return Promise.resolve();
         }
     }
@@ -419,5 +458,6 @@ const Store = (function () {
         onConfig, setConfig,
         registrarCierre, obtenerCierresDelMes,
         onListas, asegurarListaPrincipal, crearLista, eliminarLista,
+        onEstadisticasCargadas, marcarEstadisticasCargadas,
     };
 })();

@@ -101,8 +101,12 @@
                             <label for="texto-crudo">Pegar lista</label>
                             <textarea id="texto-crudo" rows="6" placeholder="Ej:&#10;Mind beige (39/40) $35.000, x2&#10;Jordan low VERNIZ /AZUL (43) × 1 $48.000,00"></textarea>
                         </div>
+                        <label class="checkbox-linea">
+                            <input type="checkbox" id="usar-precio-pegado">
+                            <span>Usar el precio que puse en el texto <em>(si no, se calcula solo)</em></span>
+                        </label>
                         <button type="button" id="btn-procesar-texto" class="btn btn-primario btn-ancho">⚡ Cargar lista automática</button>
-                        <p class="ayuda">El precio pegado se ignora: se calcula solo según el modelo, la cantidad de pares y si el cliente es del grupo. La forma de pago, estado, envío y dirección de arriba se aplican a toda la lista pegada.</p>
+                        <p class="ayuda">Por defecto el precio pegado se ignora: se calcula solo según el modelo, la cantidad de pares y si el cliente es del grupo. Tildá la opción de arriba para usar el precio tal cual está escrito en cada línea (si una línea no trae precio, esa sí se calcula automático). La forma de pago, estado, envío y dirección de arriba se aplican a toda la lista pegada.</p>
                     </div>
                 </div>
 
@@ -169,7 +173,6 @@
                                 <th>Cliente</th>
                                 <th>Modelo</th>
                                 <th>Talle</th>
-                                <th>Cant.</th>
                                 <th>Forma de pago</th>
                                 <th class="columna-icono">Estado</th>
                                 <th class="columna-icono">Envío</th>
