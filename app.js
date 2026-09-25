@@ -333,6 +333,17 @@ function parsearTextoPedido(texto) {
         let lineaOrig = lineaOrig0.trim();
         if (!lineaOrig) return;
 
+        // Formato de tienda: "2 x Modelo (39/40) por $30.000,00 cada uno."
+        // La cantidad viene AL PRINCIPIO ("N x"), y después del precio sobra
+        // un "cada uno" / "c/u" que no es parte del nombre.
+        let cantidadInicial = null;
+        const matchCantInicio = lineaOrig.match(/^(\d{1,3})\s*[x×]\s*(?=[A-Za-zÀ-ÿ])/i);
+        if (matchCantInicio) {
+            cantidadInicial = parseInt(matchCantInicio[1]) || 1;
+            lineaOrig = lineaOrig.slice(matchCantInicio[0].length);
+        }
+        lineaOrig = lineaOrig.replace(/\bcada\s+un[oa]\b\.?/gi, '').replace(/\bc\/u\b\.?/gi, '').trim();
+
         let talle = null;
         const matchTalle = lineaOrig.match(/\((\d{2,3}(?:[.,]5)?)(?:\s*\/\s*(\d{2,3}(?:[.,]5)?))?\)/);
         if (matchTalle) {
@@ -349,13 +360,25 @@ function parsearTextoPedido(texto) {
 
         const precioInfo = extraerPrecioDeLinea(lineaOrig, parseInt(talle));
 
-        let cantidad = 1;
-        const matchCantidad = lineaOrig.match(/[x×]\s*(\d+)/i);
-        if (matchCantidad) cantidad = parseInt(matchCantidad[1]) || 1;
+        // Si la cantidad vino al principio ("2 x ..."), no se busca otra al
+        // final (ni se le saca "x<número>" al nombre: podría comerse una parte
+        // real del modelo, como "vapormax 2").
+        let cantidad = cantidadInicial !== null ? cantidadInicial : 1;
+        if (cantidadInicial === null) {
+            const matchCantidad = lineaOrig.match(/(?:^|[^A-Za-zÀ-ÿ])[x×]\s*(\d+)/i);
+            if (matchCantidad) cantidad = parseInt(matchCantidad[1]) || 1;
+        }
 
         let nombreLimpio = lineaOrig;
-        if (precioInfo) nombreLimpio = nombreLimpio.replace(precioInfo.textoOriginal, '');
-        nombreLimpio = nombreLimpio.replace(/[x×]\s*\d+/gi, '');
+        if (precioInfo) {
+            // "... por $30.000,00": se saca también la palabra "por" que lo antecede.
+            const precioEscapado = precioInfo.textoOriginal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const conPor = new RegExp('\\bpor\\s*' + precioEscapado, 'i');
+            nombreLimpio = conPor.test(nombreLimpio)
+                ? nombreLimpio.replace(conPor, '')
+                : nombreLimpio.replace(precioInfo.textoOriginal, '');
+        }
+        if (cantidadInicial === null) nombreLimpio = nombreLimpio.replace(/(^|[^A-Za-zÀ-ÿ])[x×]\s*\d+/gi, '$1');
         nombreLimpio = nombreLimpio.replace(/\(\s*\d{1,3}(?:[.,]5)?\s*(?:\/\s*\d{1,3}(?:[.,]5)?\s*)?\)/g, '');
         nombreLimpio = nombreLimpio.replace(/[\/\\]/g, ' ');
         // Incluye los espacios en la misma limpieza final (no solo la
@@ -647,7 +670,13 @@ window.alternarEstado = function (id) {
 window.alternarEnvio = function (id) {
     const p = pedidos.find(x => x.id === id); if (!p) return;
     const i = OPCIONES_ENVIO.indexOf(p.envio || '');
-    Store.updatePedido(id, { envio: OPCIONES_ENVIO[(i + 1) % OPCIONES_ENVIO.length] });
+    const nuevoEnvio = OPCIONES_ENVIO[(i + 1) % OPCIONES_ENVIO.length];
+    // El envío es del CLIENTE, no de cada par: al cambiarlo en una línea se
+    // cambia en todas las que ese cliente tenga en esta lista.
+    const key = (p.cliente || '').trim().toLowerCase();
+    pedidos
+        .filter(x => (x.cliente || '').trim().toLowerCase() === key && (x.envio || '') !== nuevoEnvio)
+        .forEach(x => Store.updatePedido(x.id, { envio: nuevoEnvio }));
 };
 
 window.resetearPrecioManual = function (id) {
