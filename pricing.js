@@ -119,6 +119,12 @@ function categoriasPorDefecto() {
             { mayoristaUnidad: 43000, mayoristaMayor: 37000, minoristaUnidad: 55000, minoristaMayor: 37000 }),
         crearCategoria('Botitas', ['botita', 'botitas'], 'zapatilla',
             { mayoristaUnidad: 43000, mayoristaMayor: 39000, minoristaUnidad: 50000, minoristaMayor: 39000 }),
+        // Las botitas Jordan (de cualquier color: pink, vermelho, etc.) NO son
+        // botitas de niño: van a precio de Jordan. Sin esta regla caían en
+        // "Botitas" y salían más baratas de lo que corresponde.
+        crearCategoria('Jordan botitas (todos los colores)',
+            ['jordan botita', 'jordan 1 botita', 'botita jordan', 'botitas jordan'], 'zapatilla',
+            { mayoristaUnidad: 43000, mayoristaMayor: 39000, minoristaUnidad: 55000, minoristaMayor: 39000 }),
         // "New Balance 530" (el combo completo) tiene que ganarle a "New
         // Balance" solo, así que se agrega como palabra clave propia —
         // sigue siendo la categoría "530" pero ahora también la reconoce
@@ -231,7 +237,12 @@ function completarCostosFaltantes(config) {
 // le toque, igual que para el precio). null = falta cargar ese costo.
 function costoUnitarioDeModelo(config, modelo) {
     const cat = matchearCategoria(config.categorias, normalizarTexto(modelo));
-    const costo = cat ? cat.costo : config.costoDefault;
+    // Si la categoría no tiene un costo cargado a mano, se deduce solo de su
+    // precio "por mayor" (misma tabla de siempre): así una regla nueva ya
+    // calcula ganancia sin tener que acordarse de cargar el costo aparte.
+    const costo = cat
+        ? (typeof cat.costo === 'number' ? cat.costo : costoSugerido(cat.precios))
+        : (typeof config.costoDefault === 'number' ? config.costoDefault : costoSugerido(config.defaultPrecios));
     return typeof costo === 'number' ? costo : null;
 }
 

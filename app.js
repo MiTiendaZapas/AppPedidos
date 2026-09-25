@@ -1524,7 +1524,10 @@ function renderizarListaCategorias() {
 }
 
 document.getElementById('btn-agregar-categoria').addEventListener('click', () => {
-    configDraft.categorias.push(crearCategoria('Nueva categoría', [], 'zapatilla', {}));
+    // Nace con los precios "de todo lo demás" ya cargados (en vez de todos en
+    // $0): así ya sirve tal cual y solo se ajusta lo que sea distinto. El
+    // costo se deduce solo del precio por mayor (ver costoUnitarioDeModelo).
+    configDraft.categorias.push(crearCategoria('Nueva categoría', [], 'zapatilla', { ...configDraft.defaultPrecios }));
     renderizarListaCategorias();
 });
 
@@ -1589,6 +1592,7 @@ function crearFilaCategoria(cat, indice) {
 
 function pintarPreciosCategoria(contenedor, cat) {
     contenedor.innerHTML = '';
+    let inputCosto = null; // se completa en campoCosto(), para poder acompañarlo desde el precio
     function campoPrecio(etiqueta, clave) {
         const label = document.createElement('label');
         label.className = 'precio-mini';
@@ -1597,7 +1601,18 @@ function pintarPreciosCategoria(contenedor, cat) {
         const input = document.createElement('input');
         input.type = 'number'; input.min = '0'; input.step = '500';
         input.value = cat.precios[clave] || 0;
-        input.addEventListener('input', () => cat.precios[clave] = parseFloat(input.value) || 0);
+        input.addEventListener('input', () => {
+            const anterior = cat.precios[clave];
+            cat.precios[clave] = parseFloat(input.value) || 0;
+            // Al cambiar el precio "por mayor", el costo acompaña solo (según
+            // la tabla de costos) — salvo que se lo haya puesto a mano.
+            if (clave === 'mayoristaMayor' && inputCosto
+                && (cat.costo === null || cat.costo === costoSugerido({ mayoristaMayor: anterior }))) {
+                const nuevoCosto = costoSugerido(cat.precios);
+                cat.costo = nuevoCosto;
+                inputCosto.value = nuevoCosto === null ? '' : nuevoCosto;
+            }
+        });
         label.append(span, input);
         return label;
     }
@@ -1610,11 +1625,13 @@ function pintarPreciosCategoria(contenedor, cat) {
         span.textContent = 'Tu costo por par';
         const input = document.createElement('input');
         input.type = 'number'; input.min = '0'; input.step = '500';
-        input.placeholder = 'sin cargar';
+        input.placeholder = 'automático';
+        input.title = 'Vacío = se deduce solo del precio por mayor. Escribí un número para fijarlo a mano.';
         input.value = typeof cat.costo === 'number' ? cat.costo : '';
         input.addEventListener('input', () => {
             cat.costo = input.value === '' ? null : (parseFloat(input.value) || 0);
         });
+        inputCosto = input;
         label.append(span, input);
         return label;
     }
