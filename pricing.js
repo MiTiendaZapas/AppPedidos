@@ -32,6 +32,24 @@ function nuevaReglaId() {
 // tabla: 'mayorista' | 'minorista'   nivel: 'Unidad' | 'Mayor'
 function clavePrecio(tabla, nivel) { return tabla + nivel; }
 
+// Lo que le SALE al negocio cada par, según el precio "por mayor" de la
+// categoría (así lo pasó el dueño: los pares que se venden a 37.000 por mayor
+// le cuestan 33.000, etc.). Solo se usa para SEMBRAR el costo de cada
+// categoría la primera vez — después se edita a mano en Configuración.
+const COSTO_POR_PRECIO_MAYOR = {
+    37000: 33000,
+    39000: 36000,
+    42000: 39000,
+    50000: 45000,
+    31000: 26000, // ojotas
+    35000: 30000, // mind
+};
+
+function costoSugerido(precios) {
+    const costo = COSTO_POR_PRECIO_MAYOR[precios && precios.mayoristaMayor];
+    return costo === undefined ? null : costo; // null = todavía no se cargó el costo
+}
+
 function crearCategoria(etiqueta, keywords, tipo, precios, opciones) {
     opciones = opciones || {};
     return {
@@ -39,6 +57,8 @@ function crearCategoria(etiqueta, keywords, tipo, precios, opciones) {
         etiqueta,
         keywords,                  // array de strings (sin acentos, minúsculas)
         tipo: tipo || 'zapatilla', // 'zapatilla' (cuenta para el 5+) | 'ropa' (precio fijo)
+        // Costo por unidad (lo que te sale a vos); null = sin dato todavía.
+        costo: opciones.costo !== undefined ? opciones.costo : costoSugerido(precios),
         precios: {                 // los 4 precios; en 'ropa' solo se usan/muestran los "Unidad"
             mayoristaUnidad: precios.mayoristaUnidad || 0,
             mayoristaMayor: precios.mayoristaMayor || 0,
@@ -188,7 +208,31 @@ function configPreciosPorDefecto() {
         categorias: categoriasPorDefecto(),
         defaultPrecios: defaultPrecioPorDefecto(),
         recargoCambio: 5000,
+        costoDefault: costoSugerido(defaultPrecioPorDefecto()), // para modelos que no entran en ninguna categoría
     };
+}
+
+// Las configuraciones guardadas ANTES de existir el costo no lo tienen:
+// se les siembra una sola vez (según COSTO_POR_PRECIO_MAYOR) sin tocar nada
+// más. Devuelve true si cambió algo (para guardarla de nuevo).
+function completarCostosFaltantes(config) {
+    let cambio = false;
+    (config.categorias || []).forEach(cat => {
+        if (!('costo' in cat)) { cat.costo = costoSugerido(cat.precios); cambio = true; }
+    });
+    if (!('costoDefault' in config)) {
+        config.costoDefault = costoSugerido(config.defaultPrecios);
+        cambio = true;
+    }
+    return cambio;
+}
+
+// Cuánto le cuesta al negocio UN par de este modelo (según la categoría que
+// le toque, igual que para el precio). null = falta cargar ese costo.
+function costoUnitarioDeModelo(config, modelo) {
+    const cat = matchearCategoria(config.categorias, normalizarTexto(modelo));
+    const costo = cat ? cat.costo : config.costoDefault;
+    return typeof costo === 'number' ? costo : null;
 }
 
 // ----------------------------------------------------------------------------

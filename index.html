@@ -180,6 +180,7 @@
                                 <th class="columna-privada">Importe</th>
                                 <th class="columna-privada">Pago</th>
                                 <th class="columna-privada">Saldo</th>
+                                <th class="columna-privada" title="Lo que ganás en esta línea: precio de venta menos lo que te cuesta el par">Ganancia</th>
                                 <th class="columna-accion"></th>
                             </tr>
                         </thead>
@@ -210,6 +211,10 @@
                     <div class="kpi kpi-peligro">
                         <span class="kpi-valor" id="total-pendiente">$0</span>
                         <span class="kpi-etiqueta">Pendiente de cobro</span>
+                    </div>
+                    <div class="kpi kpi-exito">
+                        <span class="kpi-valor" id="total-ganancia">$0</span>
+                        <span class="kpi-etiqueta" id="etiqueta-ganancia">Ganancia (de lo facturado)</span>
                     </div>
                 </div>
                 <ul id="lista-resumen-clientes" class="lista-limpia"></ul>
@@ -303,6 +308,11 @@
                             <label for="input-default-mayorista-mayor">Mayorista · 5 o más</label>
                             <input type="number" id="input-default-mayorista-mayor" min="0" step="500">
                         </div>
+                    </div>
+
+                    <div class="campo campo-chico" style="margin-top:14px;">
+                        <label for="input-default-costo">Tu costo por par (modelos sin categoría)</label>
+                        <input type="number" id="input-default-costo" min="0" step="500" placeholder="sin cargar">
                     </div>
 
                     <button id="btn-guardar-general" class="btn btn-exito" style="margin-top:14px;">Guardar</button>

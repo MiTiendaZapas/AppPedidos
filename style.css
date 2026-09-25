@@ -294,6 +294,10 @@ tbody tr:hover .columna-privada { background: var(--primary-bg); }
 .celda-editable { cursor: text; border-radius: 3px; }
 .celda-editable:focus { background: var(--surface); outline: 2px solid var(--primary); outline-offset: -2px; }
 .celda-centro { text-align: center; }
+.tabla-estadisticas td.ganancia-positiva { color: var(--success); font-weight: 700; }
+.celda-ganancia { font-weight: 800; }
+.celda-ganancia.ganancia-positiva { color: var(--success); }
+.celda-ganancia.ganancia-negativa { color: var(--danger); }
 .celda-saldo { font-weight: 800; }
 .celda-saldo.saldo-pendiente { color: var(--danger); }
 .celda-saldo.saldo-saldado { color: var(--success); }
@@ -325,7 +329,7 @@ body[data-theme="dark"] .badge-warning { color: var(--warning); }
 /* ============================================================================
    RESUMEN (KPIs) / LOGÍSTICA / DEUDORES
    ============================================================================ */
-.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .kpi { border-radius: var(--radius); padding: 14px 14px; display: flex; flex-direction: column; gap: 4px; background: var(--surface-alt); border: 1px solid var(--border); }
 .kpi-valor { font-size: 20px; font-weight: 800; }
 .kpi-etiqueta { font-size: 11.5px; color: var(--text-muted); font-weight: 600; }
@@ -425,6 +429,8 @@ body[data-theme="dark"] .badge-warning { color: var(--warning); }
 }
 .precio-mini { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; font-weight: 700; color: var(--text-muted); flex: 1 1 130px; min-width: 110px; }
 .precio-mini input { padding: 6px 8px; font-size: 13px; font-weight: 700; color: var(--text); }
+.precio-mini.precio-costo { color: var(--warning); }
+.precio-mini.precio-costo input { border-style: dashed; }
 
 .categoria-avanzado { display: flex; flex-wrap: wrap; gap: 8px; }
 .categoria-prioridad { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 6px 8px; cursor: help; }

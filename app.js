@@ -128,6 +128,32 @@ function deudaDeLinea(p) {
     return (parseFloat(p.importe) || 0) + recargoDeLinea(p);
 }
 
+// Lo que GANA el negocio con esta línea = lo que se factura del producto
+// menos lo que le cuestan los pares (el costo sale de la categoría del
+// modelo, ver Configuración). Un "Cambio" de talle no tiene producto: su
+// ganancia es el recargo entero. Devuelve null si no se puede calcular (la
+// categoría todavía no tiene costo cargado, o la línea no tiene precio).
+function gananciaDeLinea(p) {
+    if (p.pago === 'Cambio') return recargoDeLinea(p);
+    const importe = parseFloat(p.importe) || 0;
+    if (importe <= 0 || !precioConfig) return null;
+    const costo = costoUnitarioDeModelo(precioConfig, p.modelo);
+    if (costo === null) return null;
+    return importe - costo * (parseInt(p.cantidad) || 1);
+}
+
+// Suma la ganancia de una lista de líneas. Las que no tienen costo cargado
+// no suman nada y se cuentan aparte (para avisar que el total es parcial).
+function resumenGanancia(lista) {
+    let ganancia = 0, sinCosto = 0;
+    lista.forEach(p => {
+        const g = gananciaDeLinea(p);
+        if (g === null) { if ((parseFloat(p.importe) || 0) > 0) sinCosto++; }
+        else ganancia += g;
+    });
+    return { ganancia, sinCosto };
+}
+
 // Recalcula el precio automático de TODAS las líneas de un cliente que no
 // tengan precio manual, usando el estado actual de `pedidos` + líneas extra
 // que todavía no se guardaron (por ej. las que se están por insertar).
@@ -695,6 +721,10 @@ async function registrarEstadisticasDeLista(lista) {
         modelosVendidos[nombreModelo] = (modelosVendidos[nombreModelo] || 0) + cantidad;
     });
 
+    // La ganancia se congela ACÁ (con los costos de hoy): si más adelante
+    // cambian los costos, los cierres ya guardados no se mueven.
+    const g = resumenGanancia(confirmados);
+
     await Store.registrarCierre({
         mes: idMes(ahora),
         fecha: ahora.toISOString().slice(0, 10),
@@ -702,8 +732,25 @@ async function registrarEstadisticasDeLista(lista) {
         cantidadPedidos: confirmados.length,
         cantidadPares,
         modelosVendidos,
+        ganancia: g.ganancia,
+        lineasSinCosto: g.sinCosto,
     });
     return true;
+}
+
+// Ganancia de un cierre. Los nuevos la traen guardada; los viejos (de antes
+// de que existiera el costo) se estiman: lo facturado menos lo que costaron
+// los pares vendidos con los costos de hoy. Si a alguno de esos pares le
+// falta el costo, el número queda parcial (se marca con sinCosto > 0).
+function gananciaDeCierre(c) {
+    if (typeof c.ganancia === 'number') return { ganancia: c.ganancia, sinCosto: c.lineasSinCosto || 0 };
+    let costo = 0, sinCosto = 0;
+    Object.entries(c.modelosVendidos || {}).forEach(([modelo, cant]) => {
+        const n = parseFloat(cant) || 0;
+        const cu = precioConfig ? costoUnitarioDeModelo(precioConfig, modelo) : null;
+        if (cu === null) sinCosto += n; else costo += cu * n;
+    });
+    return { ganancia: (parseFloat(c.facturacion) || 0) - costo, sinCosto };
 }
 
 // Refleja el estado COMPARTIDO (entre las dos computadoras) de si esta
@@ -906,6 +953,17 @@ function actualizarResumen() {
     totalFacturadoSpan.textContent = formatoPesos(totalFacturado);
     totalCobradoSpan.textContent = formatoPesos(totalCobrado);
     totalPendienteSpan.textContent = formatoPesos(totalPendiente);
+
+    // Ganancia de lo facturado (solo pedidos confirmados, igual que el total
+    // facturado). Si a alguna categoría todavía no se le cargó el costo, esas
+    // líneas no suman y se avisa en la etiqueta que el número es parcial.
+    const g = resumenGanancia(confirmados);
+    const gananciaSpan = document.getElementById('total-ganancia');
+    const etiquetaGanancia = document.getElementById('etiqueta-ganancia');
+    if (gananciaSpan) gananciaSpan.textContent = formatoPesos(g.ganancia);
+    if (etiquetaGanancia) etiquetaGanancia.textContent = g.sinCosto > 0
+        ? `Ganancia (faltan costos de ${g.sinCosto} línea${g.sinCosto === 1 ? '' : 's'})`
+        : 'Ganancia (de lo facturado)';
 
     const conteoClientes = {};
     confirmados.forEach(p => {
@@ -1208,7 +1266,7 @@ function renderizarTabla() {
     }
 
     if (filtro && copia.length === 0) {
-        listaBody.innerHTML = `<tr><td colspan="11" class="vacio-fila">No se encontraron pedidos para "${filtroTexto}".</td></tr>`;
+        listaBody.innerHTML = `<tr><td colspan="12" class="vacio-fila">No se encontraron pedidos para "${filtroTexto}".</td></tr>`;
     }
 
     copia.forEach((pedido, indice) => {
@@ -1216,7 +1274,7 @@ function renderizarTabla() {
         if (indice === 0 || esGrupoActual !== esClienteGrupo(copia[indice - 1].cliente)) {
             const filaSeparador = document.createElement('tr');
             filaSeparador.className = 'fila-separador-grupo-tr';
-            filaSeparador.innerHTML = `<td colspan="11" class="fila-separador-grupo">${esGrupoActual ? '👥 Grupo / revendedores (mayorista)' : '🛍️ Clientes comunes (minorista)'}</td>`;
+            filaSeparador.innerHTML = `<td colspan="12" class="fila-separador-grupo">${esGrupoActual ? '👥 Grupo / revendedores (mayorista)' : '🛍️ Clientes comunes (minorista)'}</td>`;
             listaBody.appendChild(filaSeparador);
         }
 
@@ -1231,6 +1289,7 @@ function renderizarTabla() {
         // muestra en Saldo apenas se marca "Cambio", sin esperar a que se
         // cargue algo en Pago (a diferencia de una venta normal).
         const mostrarCalculo = hayDeuda && (hayPago || pedido.pago === 'Cambio');
+        const ganancia = gananciaDeLinea(pedido);
 
         fila.innerHTML = `
             <td contenteditable="true" class="celda-editable" onblur="guardarEdicion('${pedido.id}', 'cliente', this)">${pedido.cliente}</td>
@@ -1246,6 +1305,7 @@ function renderizarTabla() {
             <td class="columna-privada">${pedido.importe ? formatoPesos(pedido.importe) : ''}</td>
             <td contenteditable="true" class="celda-editable columna-privada" onblur="guardarEdicion('${pedido.id}', 'pagoMonto', this)">${pagado > 0 ? formatoPesos(pagado) : (hayPago ? '$0' : '')}</td>
             <td class="celda-saldo columna-privada ${mostrarCalculo ? (saldo > 0 ? 'saldo-pendiente' : 'saldo-saldado') : ''}">${mostrarCalculo ? (saldo > 0 ? formatoPesos(saldo) : '✅ Saldado') : '—'}</td>
+            <td class="celda-ganancia columna-privada ${ganancia === null ? '' : (ganancia < 0 ? 'ganancia-negativa' : 'ganancia-positiva')}" ${ganancia === null && (parseFloat(pedido.importe) || 0) > 0 ? 'title="Falta cargar el costo de esta categoría (Configuración)"' : ''}>${ganancia === null ? '—' : formatoPesos(ganancia)}</td>
             <td class="columna-accion"><button onclick="eliminarPedido('${pedido.id}')" class="btn-eliminar">✕</button></td>
         `;
         listaBody.appendChild(fila);
@@ -1357,14 +1417,14 @@ document.getElementById('btn-excel').addEventListener('click', async () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Pedidos');
 
-    sheet.mergeCells('A1:J1');
+    sheet.mergeCells('A1:K1');
     const titulo = sheet.getCell('A1');
     titulo.value = 'CONTROL DE PEDIDOS - ZAPATILLAS';
     titulo.font = { bold: true, size: 12 };
     titulo.alignment = { vertical: 'middle', horizontal: 'center' };
 
     const encabezados = sheet.getRow(3);
-    encabezados.values = ['Cliente', 'Modelo', 'Talle', 'Cant.', 'Precio unit.', 'Importe', 'Pago', 'Saldo', 'Forma de Pago', 'Estado', 'Envío'];
+    encabezados.values = ['Cliente', 'Modelo', 'Talle', 'Cant.', 'Precio unit.', 'Importe', 'Pago', 'Saldo', 'Ganancia', 'Forma de Pago', 'Estado', 'Envío'];
     encabezados.eachCell(celda => {
         celda.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
         celda.font = { color: { argb: 'FFFFFFFF' }, bold: true };
@@ -1372,9 +1432,10 @@ document.getElementById('btn-excel').addEventListener('click', async () => {
         celda.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
     });
 
-    [17, 20, 8, 7, 12, 12, 12, 12, 18, 12, 10].forEach((w, i) => sheet.getColumn(i + 1).width = w);
+    [17, 20, 8, 7, 12, 12, 12, 12, 12, 18, 12, 10].forEach((w, i) => sheet.getColumn(i + 1).width = w);
 
     let totalDeuda = 0, totalPagado = 0;
+    const gananciaExcel = resumenGanancia(pedidos);
     pedidos.forEach((p, index) => {
         const deuda = deudaDeLinea(p);
         const pagado = parseFloat(p.pagoMonto) || 0;
@@ -1387,6 +1448,7 @@ document.getElementById('btn-excel').addEventListener('click', async () => {
             p.importe || "",
             pagado || "",
             deuda ? Math.max(deuda - pagado, 0) : "",
+            gananciaDeLinea(p) === null ? "" : gananciaDeLinea(p),
             p.pago || "",
             p.estado === '✅' ? 'Sí' : (p.estado === '❌' ? 'No' : ''),
             p.envio || ""
@@ -1398,7 +1460,7 @@ document.getElementById('btn-excel').addEventListener('click', async () => {
     });
 
     const filaTotales = sheet.getRow(4 + pedidos.length);
-    filaTotales.values = ['', '', '', '', 'TOTALES', '', totalPagado, totalDeuda - totalPagado, '', '', ''];
+    filaTotales.values = ['', '', '', '', 'TOTALES', '', totalPagado, totalDeuda - totalPagado, gananciaExcel.ganancia, '', '', ''];
     filaTotales.font = { bold: true };
     filaTotales.eachCell(celda => {
         celda.alignment = { vertical: 'middle', horizontal: 'center' };
@@ -1447,6 +1509,7 @@ function renderizarConfigUI() {
     document.getElementById('input-default-minorista-mayor').value = configDraft.defaultPrecios.minoristaMayor;
     document.getElementById('input-default-mayorista-unidad').value = configDraft.defaultPrecios.mayoristaUnidad;
     document.getElementById('input-default-mayorista-mayor').value = configDraft.defaultPrecios.mayoristaMayor;
+    document.getElementById('input-default-costo').value = typeof configDraft.costoDefault === 'number' ? configDraft.costoDefault : '';
     renderizarListaClientesConfig();
 }
 
@@ -1538,10 +1601,28 @@ function pintarPreciosCategoria(contenedor, cat) {
         label.append(span, input);
         return label;
     }
+    // Lo que te sale a vos cada par: con esto se calcula la ganancia de cada
+    // línea. Vacío = todavía sin costo (esa categoría no suma a la ganancia).
+    function campoCosto() {
+        const label = document.createElement('label');
+        label.className = 'precio-mini precio-costo';
+        const span = document.createElement('span');
+        span.textContent = 'Tu costo por par';
+        const input = document.createElement('input');
+        input.type = 'number'; input.min = '0'; input.step = '500';
+        input.placeholder = 'sin cargar';
+        input.value = typeof cat.costo === 'number' ? cat.costo : '';
+        input.addEventListener('input', () => {
+            cat.costo = input.value === '' ? null : (parseFloat(input.value) || 0);
+        });
+        label.append(span, input);
+        return label;
+    }
     if (cat.tipo === 'ropa') {
         contenedor.append(
             campoPrecio('Minorista', 'minoristaUnidad'),
             campoPrecio('Mayorista', 'mayoristaUnidad'),
+            campoCosto(),
         );
     } else {
         contenedor.append(
@@ -1549,6 +1630,7 @@ function pintarPreciosCategoria(contenedor, cat) {
             campoPrecio('Minorista · 5 o más', 'minoristaMayor'),
             campoPrecio('Mayorista · menos de 5', 'mayoristaUnidad'),
             campoPrecio('Mayorista · 5 o más', 'mayoristaMayor'),
+            campoCosto(),
         );
     }
 }
@@ -1623,10 +1705,14 @@ document.getElementById('btn-guardar-general').addEventListener('click', () => {
         mayoristaUnidad: parseFloat(document.getElementById('input-default-mayorista-unidad').value) || 0,
         mayoristaMayor: parseFloat(document.getElementById('input-default-mayorista-mayor').value) || 0,
     };
+    const costoDefaultRaw = document.getElementById('input-default-costo').value;
+    const nuevoCostoDefault = costoDefaultRaw === '' ? null : (parseFloat(costoDefaultRaw) || 0);
     precioConfig.recargoCambio = nuevoRecargo;
     precioConfig.defaultPrecios = nuevoDefault;
+    precioConfig.costoDefault = nuevoCostoDefault;
     configDraft.recargoCambio = nuevoRecargo;
     configDraft.defaultPrecios = nuevoDefault;
+    configDraft.costoDefault = nuevoCostoDefault;
     Store.setConfig(precioConfig).then(() => {
         renderizarTabla();
         recomputarTodosLosClientes();
@@ -1748,20 +1834,24 @@ async function cargarEstadisticasPro() {
 function renderizarMesEstadisticasPro(titulo, cierresSinOrdenar) {
     const cierres = (cierresSinOrdenar || []).slice().sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''));
 
-    let facturacionTotal = 0, paresTotal = 0;
+    let facturacionTotal = 0, paresTotal = 0, gananciaTotal = 0, sinCostoTotal = 0;
     const modelosTotal = {};
-    const porDia = {}; // fecha -> {pares, facturacion, cantidadPedidos, modelos: {nombre: cantidad}}
+    const porDia = {}; // fecha -> {pares, facturacion, ganancia, cantidadPedidos, modelos: {nombre: cantidad}}
     cierres.forEach(c => {
         const fact = parseFloat(c.facturacion) || 0;
         const pares = parseFloat(c.cantidadPares) || 0;
+        const gc = gananciaDeCierre(c);
         facturacionTotal += fact;
         paresTotal += pares;
+        gananciaTotal += gc.ganancia;
+        sinCostoTotal += gc.sinCosto;
         Object.entries(c.modelosVendidos || {}).forEach(([nombre, cantidad]) => {
             modelosTotal[nombre] = (modelosTotal[nombre] || 0) + (parseFloat(cantidad) || 0);
         });
-        if (!porDia[c.fecha]) porDia[c.fecha] = { pares: 0, facturacion: 0, cantidadPedidos: 0, modelos: {} };
+        if (!porDia[c.fecha]) porDia[c.fecha] = { pares: 0, facturacion: 0, ganancia: 0, cantidadPedidos: 0, modelos: {} };
         porDia[c.fecha].pares += pares;
         porDia[c.fecha].facturacion += fact;
+        porDia[c.fecha].ganancia += gc.ganancia;
         porDia[c.fecha].cantidadPedidos += (parseFloat(c.cantidadPedidos) || 0);
         Object.entries(c.modelosVendidos || {}).forEach(([nombre, cantidad]) => {
             porDia[c.fecha].modelos[nombre] = (porDia[c.fecha].modelos[nombre] || 0) + (parseFloat(cantidad) || 0);
@@ -1788,6 +1878,7 @@ function renderizarMesEstadisticasPro(titulo, cierresSinOrdenar) {
 
         <div class="kpis">
             <div class="kpi kpi-info"><span class="kpi-valor">${formatoPesos(facturacionTotal)}</span><span class="kpi-etiqueta">Facturación total</span></div>
+            <div class="kpi kpi-exito"><span class="kpi-valor">${formatoPesos(gananciaTotal)}</span><span class="kpi-etiqueta">Ganancia${sinCostoTotal > 0 ? ` (aprox.: faltan costos de ${sinCostoTotal} par${sinCostoTotal === 1 ? '' : 'es'})` : ''}</span></div>
             <div class="kpi kpi-neutro"><span class="kpi-valor">${paresTotal}</span><span class="kpi-etiqueta">Pares vendidos</span></div>
             <div class="kpi kpi-exito"><span class="kpi-valor">${cierres.length}</span><span class="kpi-etiqueta">Cierres de lista</span></div>
             <div class="kpi kpi-neutro"><span class="kpi-valor">${formatoPesos(promedioPorCierre)}</span><span class="kpi-etiqueta">Promedio por cierre</span></div>
@@ -1819,7 +1910,7 @@ function renderizarMesEstadisticasPro(titulo, cierresSinOrdenar) {
         ${dias.length === 0 ? '<p class="vacio">Sin cierres registrados.</p>' : `
         <div class="tabla-scroll">
         <table class="tabla-estadisticas">
-            <thead><tr><th>Fecha</th><th>Pedidos</th><th>Pares</th><th>Facturación</th></tr></thead>
+            <thead><tr><th>Fecha</th><th>Pedidos</th><th>Pares</th><th>Facturación</th><th>Ganancia</th></tr></thead>
             <tbody>
                 ${dias.slice().reverse().map(([fecha, d]) => {
                     const idDetalle = `detalle-dia-${fecha}`;
@@ -1830,9 +1921,10 @@ function renderizarMesEstadisticasPro(titulo, cierresSinOrdenar) {
                         <td>${d.cantidadPedidos}</td>
                         <td>${d.pares}</td>
                         <td>${formatoPesos(d.facturacion)}</td>
+                        <td class="ganancia-positiva">${formatoPesos(d.ganancia)}</td>
                     </tr>
                     <tr id="${idDetalle}" class="fila-detalle-dia">
-                        <td colspan="4">
+                        <td colspan="5">
                             <strong>Top del ${formatoFechaLegible(fecha)}:</strong>
                             ${top.length === 0 ? '<p class="vacio">Sin modelos registrados.</p>' : `
                             <ol class="lista-top-dia">
@@ -1917,6 +2009,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         let yaSeSembroConfigPorDefecto = false; // evita reintentar sembrar en bucle si algo sale mal
+        let yaSeMigroCostos = false; // evita reintentar el guardado en bucle
         Store.onConfig(cfg => {
             const esPrimeraCarga = precioConfig === null;
             // Si no hay nada guardado, o lo que hay es del formato viejo
@@ -1933,6 +2026,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } else {
                 precioConfig = cfg;
+                // Configuración guardada antes de existir el "costo": se le
+                // agrega (una sola vez, solo ese campo) según los costos
+                // que pasó el dueño. Si algo cambió, se guarda de nuevo.
+                if (completarCostosFaltantes(precioConfig) && !yaSeMigroCostos) {
+                    yaSeMigroCostos = true;
+                    Store.setConfig(precioConfig);
+                }
             }
             if (!modalConfigAbierto) {
                 configDraft = JSON.parse(JSON.stringify(precioConfig));
