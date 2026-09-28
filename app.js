@@ -22,6 +22,7 @@ let modalConfigAbierto = false;
 let respaldoCompartido = null; // último respaldo de "Borrar todo" de la lista activa (compartido: se ve en cualquier compu)
 let timeoutDeshacer = null;
 let filtroTexto = '';          // buscador de la lista
+let ultimoResumenClientes = []; // última lista de clientes de Resumen (para el botón "📋 Copiar")
 
 const VENTANA_DESHACER_MS = 30000; // 30s para que cualquiera de los dos alcance a deshacer
 
@@ -1012,6 +1013,7 @@ function actualizarResumen() {
     });
 
     const clientesArray = Object.values(conteoClientes).sort((a, b) => a.nombre.localeCompare(b.nombre));
+    ultimoResumenClientes = clientesArray; // para "📋 Copiar" (window.copiarListaCliente)
 
     if (clientesArray.length === 0) {
         listaClientesUl.innerHTML = '<li class="vacio">No hay pedidos confirmados aún.</li>';
@@ -1022,7 +1024,10 @@ function actualizarResumen() {
             <li>
                 <div class="cliente-header" onclick="toggleDetalles('detalles-${index}')">
                     <span>${c.nombre} <span class="hint-click">(click)</span></span>
-                    <span class="badge-cantidad">×${c.cantidad}</span>
+                    <span class="cliente-header-derecha">
+                        <button type="button" class="btn-mini btn-copiar-cliente" title="Copiar la lista de pedidos de ${c.nombre}" onclick="event.stopPropagation(); copiarListaCliente(${index})">📋</button>
+                        <span class="badge-cantidad">×${c.cantidad}</span>
+                    </span>
                 </div>
                 <ul id="detalles-${index}" class="cliente-detalles">
                     ${c.detalles.map(d => `
@@ -1238,6 +1243,33 @@ document.getElementById('btn-copiar-direcciones').addEventListener('click', asyn
 window.toggleDetalles = function (id) {
     const el = document.getElementById(id);
     el.style.display = (el.style.display === 'block') ? 'none' : 'block';
+};
+
+// Arma la lista de pedidos de un cliente en texto plano, lista para pegar:
+// "Modelo (talle) $precio" por cada par, y al final el total y la cantidad
+// de pares. Los "Cambio" de talle no son pares vendidos, así que quedan
+// afuera de la lista y del total (para que el total coincida con la suma de
+// las líneas que se ven).
+function textoListaCliente(c) {
+    const pares = c.detalles.filter(d => !d.esCambio);
+    const lineas = pares.map(d => `${d.modelo} (${d.talle})${d.cantidad > 1 ? ' x' + d.cantidad : ''} ${formatoPesos(d.importe)}`);
+    const totalPares = pares.reduce((s, d) => s + (parseInt(d.cantidad) || 1), 0);
+    const totalSinCambio = pares.reduce((s, d) => s + (parseFloat(d.importe) || 0), 0);
+    lineas.push('');
+    lineas.push(`Total: ${formatoPesos(totalSinCambio)} (${totalPares} par${totalPares === 1 ? '' : 'es'})`);
+    return lineas.join('\n');
+}
+
+window.copiarListaCliente = async function (index) {
+    const c = ultimoResumenClientes[index];
+    if (!c) return;
+    const texto = textoListaCliente(c);
+    try {
+        await navigator.clipboard.writeText(texto);
+        alert(`📋 Copiada la lista de ${c.nombre}.`);
+    } catch (e) {
+        alert('No se pudo copiar automáticamente. Esta es la lista:\n\n' + texto);
+    }
 };
 
 // ----------------------------------------------------------------------------
