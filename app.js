@@ -54,6 +54,13 @@ function formatoPesos(numero) {
     return '$' + n.toLocaleString('es-AR', { maximumFractionDigits: 0 });
 }
 
+// Un precio escrito "a mano" menor a $1.000 casi seguro está en miles ("42"
+// quiere decir $42.000): una zapatilla a $42 hundió una ganancia entera. Se
+// multiplica por 1.000 y se avisa en pantalla. El 0 se respeta (= sin precio).
+function normalizarPrecioIngresado(n) {
+    return (n > 0 && n < 1000) ? n * 1000 : n;
+}
+
 function extraerNumeroTalle(talleStr) {
     return parseFloat((talleStr || '').toString().split('/')[0].replace(',', '.').trim()) || 0;
 }
@@ -440,7 +447,7 @@ document.getElementById('btn-procesar-texto').addEventListener('click', () => {
         } else if (usarPrecioPegado && l.precioPegado !== null) {
             // Se pidió respetar el precio tal cual está escrito en el texto
             // (y esta línea sí trae uno) — no se recalcula automático.
-            datosPrecio = { precioUnitario: l.precioPegado, categoria: 'Manual', tipo: clasificarTipo(precioConfig, l.modelo), manualPrecio: true };
+            datosPrecio = { precioUnitario: normalizarPrecioIngresado(l.precioPegado), categoria: 'Manual', tipo: clasificarTipo(precioConfig, l.modelo), manualPrecio: true };
         } else {
             // Automático: si se tildó "usar precio pegado" pero esta línea en
             // particular no traía ningún precio, cae acá igual.
@@ -508,7 +515,9 @@ pedidoForm.addEventListener('submit', (e) => {
         precioUnitario = 0; categoria = 'Cambio de talle'; manualPrecio = false;
         tipo = clasificarTipo(precioConfig, modelo);
     } else if (precioManualRaw !== '') {
-        precioUnitario = parseFloat(precioManualRaw) || 0;
+        const escrito = parseFloat(precioManualRaw) || 0;
+        precioUnitario = normalizarPrecioIngresado(escrito);
+        if (precioUnitario !== escrito) alert(`ℹ️ Escribiste ${escrito}: lo interpreté como ${formatoPesos(precioUnitario)} (los precios van en pesos completos, no en miles).`);
         manualPrecio = true;
         categoria = 'Manual';
         tipo = clasificarTipo(precioConfig, modelo);
@@ -589,7 +598,9 @@ window.guardarEdicion = function (id, campo, elemento) {
 
     if (campo === 'precioUnitario') {
         const limpio = nuevoValor.replace(/[\$¢\s]/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.');
-        const n = limpio ? (parseFloat(limpio) || 0) : 0;
+        const escrito = limpio ? (parseFloat(limpio) || 0) : 0;
+        const n = normalizarPrecioIngresado(escrito);
+        if (n !== escrito) alert(`ℹ️ Escribiste ${escrito}: lo interpreté como ${formatoPesos(n)} (los precios van en pesos completos, no en miles).`);
         const nuevoImporte = importeDeLinea(n, pedido.cantidad);
         Store.updatePedido(id, { precioUnitario: n, importe: nuevoImporte, manualPrecio: true, categoria: 'Manual' });
         return;
@@ -751,36 +762,90 @@ async function registrarEstadisticasDeLista(lista) {
         modelosVendidos[nombreModelo] = (modelosVendidos[nombreModelo] || 0) + cantidad;
     });
 
-    // La ganancia se congela ACÁ (con los costos de hoy): si más adelante
-    // cambian los costos, los cierres ya guardados no se mueven.
+    // Todo lo que Estadísticas necesita queda CONGELADO acá, línea por línea
+    // (precio, costo y ganancia de ese momento): si más adelante cambian los
+    // precios o los costos, los cierres ya guardados no se mueven, y cada
+    // número se puede auditar hasta el pedido que lo originó.
     const g = resumenGanancia(confirmados);
+    const lineas = confirmados.map(lineaParaCierre);
+    const deudaClientes = calcularDeudaClientes(confirmados);
+    const pendiente = Object.values(deudaClientes).reduce((s, c) => s + Math.max(c.total - c.pagado, 0), 0);
 
     await Store.registrarCierre({
         mes: idMes(ahora),
-        fecha: ahora.toISOString().slice(0, 10),
+        fecha: fechaLocalISO(ahora),
         facturacion,
         cantidadPedidos: confirmados.length,
         cantidadPares,
         modelosVendidos,
         ganancia: g.ganancia,
         lineasSinCosto: g.sinCosto,
+        cobrado: facturacion - pendiente,
+        pendiente,
+        lineas,
+        version: 2,
     });
     return true;
 }
 
-// Ganancia de un cierre. Los nuevos la traen guardada; los viejos (de antes
-// de que existiera el costo) se estiman: lo facturado menos lo que costaron
-// los pares vendidos con los costos de hoy. Si a alguno de esos pares le
-// falta el costo, el número queda parcial (se marca con sinCosto > 0).
-function gananciaDeCierre(c) {
-    if (typeof c.ganancia === 'number') return { ganancia: c.ganancia, sinCosto: c.lineasSinCosto || 0 };
-    let costo = 0, sinCosto = 0;
-    Object.entries(c.modelosVendidos || {}).forEach(([modelo, cant]) => {
-        const n = parseFloat(cant) || 0;
-        const cu = precioConfig ? costoUnitarioDeModelo(precioConfig, modelo) : null;
-        if (cu === null) sinCosto += n; else costo += cu * n;
-    });
-    return { ganancia: (parseFloat(c.facturacion) || 0) - costo, sinCosto };
+function etiquetaCategoriaDeModelo(modelo) {
+    const cat = precioConfig ? matchearCategoria(precioConfig.categorias, normalizarTexto(modelo)) : null;
+    return cat ? cat.etiqueta : 'Sin categoría';
+}
+
+// Una venta confirmada tal como queda guardada dentro del cierre (sin
+// undefined: Firestore no los acepta).
+function lineaParaCierre(p) {
+    const esCambio = p.pago === 'Cambio';
+    const g = gananciaDeLinea(p);
+    return {
+        cliente: (p.cliente || '').trim(),
+        modelo: (p.modelo || '').trim(),
+        talle: (p.talle || '').toString(),
+        categoria: esCambio ? 'Cambio de talle' : etiquetaCategoriaDeModelo(p.modelo),
+        cantidad: parseInt(p.cantidad) || 1,
+        importe: parseFloat(p.importe) || 0,
+        recargo: recargoDeLinea(p),
+        costoUnit: esCambio ? 0 : costoUnitarioDeModelo(precioConfig, p.modelo),
+        ganancia: g,
+        envio: p.envio || '',
+        pago: p.pago || '',
+        cambio: esCambio,
+    };
+}
+
+// Revisión previa al cierre: lo que se va a archivar + todo lo que huela mal
+// (precios en cero o ridículos, líneas con pérdida, márgenes raros...). Los
+// errores de carga se detectan ACÁ, antes de que entren a Estadísticas.
+function auditarListaParaCierre(lista) {
+    const confirmados = lista.filter(p => p.estado === '✅');
+    const ventas = confirmados.filter(p => p.pago !== 'Cambio');
+    const facturacion = confirmados.reduce((s, p) => s + deudaDeLinea(p), 0);
+    const pares = ventas.reduce((s, p) => s + (parseInt(p.cantidad) || 0), 0);
+    const g = resumenGanancia(confirmados);
+    const margen = facturacion > 0 ? g.ganancia / facturacion : 0;
+    const nombre = p => `${(p.cliente || '?').trim()} – ${(p.modelo || '?').trim()}`;
+    const alertas = [];
+
+    const sinPrecio = ventas.filter(p => !(parseFloat(p.importe) > 0));
+    if (sinPrecio.length) alertas.push({ nivel: 'error', texto: `${sinPrecio.length} par(es) confirmado(s) SIN precio ($0): ${sinPrecio.slice(0, 4).map(nombre).join('; ')}${sinPrecio.length > 4 ? '…' : ''}` });
+
+    const precioChico = ventas.filter(p => { const u = parseFloat(p.precioUnitario) || 0; return u > 0 && u < 1000; });
+    if (precioChico.length) alertas.push({ nivel: 'error', texto: `${precioChico.length} par(es) con precio menor a $1.000 (¿cargado en miles?): ${precioChico.slice(0, 4).map(nombre).join('; ')}${precioChico.length > 4 ? '…' : ''}` });
+
+    const conPerdida = ventas.filter(p => { const gl = gananciaDeLinea(p); return gl !== null && gl < 0 && (parseFloat(p.precioUnitario) || 0) >= 1000; });
+    if (conPerdida.length) alertas.push({ nivel: 'aviso', texto: `${conPerdida.length} par(es) vendido(s) por DEBAJO de su costo: ${conPerdida.slice(0, 4).map(nombre).join('; ')}${conPerdida.length > 4 ? '…' : ''}` });
+
+    if (g.sinCosto > 0) alertas.push({ nivel: 'aviso', texto: `${g.sinCosto} línea(s) sin costo cargado: la ganancia queda incompleta.` });
+
+    if (facturacion > 0 && (margen < 0.05 || margen > 0.30)) {
+        alertas.push({ nivel: 'aviso', texto: `Margen de ${(margen * 100).toFixed(1)}%, fuera de lo habitual (5%–30%): revisá los precios.` });
+    }
+
+    const noConfirmados = lista.length - confirmados.length;
+    if (noConfirmados > 0) alertas.push({ nivel: 'info', texto: `${noConfirmados} pedido(s) sin confirmar (no entran al cierre).` });
+
+    return { confirmados: confirmados.length, pares, facturacion, ganancia: g.ganancia, margen, alertas };
 }
 
 // Refleja el estado COMPARTIDO (entre las dos computadoras) de si esta
@@ -804,6 +869,23 @@ document.getElementById('btn-cargar-estadisticas').addEventListener('click', asy
     const btn = document.getElementById('btn-cargar-estadisticas');
     if (btn.disabled) return; // ya está cargado, o procesando un click anterior
     if (pedidos.length === 0) { alert('La lista está vacía, no hay nada para cargar a Estadísticas.'); return; }
+
+    // Revisión previa: se muestra exactamente qué se va a archivar y se avisa
+    // de todo lo raro ANTES de que entre a Estadísticas.
+    const auditoria = auditarListaParaCierre(pedidos);
+    if (auditoria.confirmados === 0) { alert('No hay pedidos confirmados (✅) para cargar a Estadísticas.'); return; }
+    const iconos = { error: '🛑', aviso: '⚠️', info: 'ℹ️' };
+    const hayProblemas = auditoria.alertas.some(a => a.nivel !== 'info');
+    const mensaje = [
+        '📊 Vas a cargar este cierre a Estadísticas:',
+        `• ${auditoria.confirmados} pedidos confirmados / ${auditoria.pares} pares`,
+        `• Facturación: ${formatoPesos(auditoria.facturacion)}`,
+        `• Ganancia: ${formatoPesos(auditoria.ganancia)} (margen ${(auditoria.margen * 100).toFixed(1)}%)`,
+        ...(auditoria.alertas.length ? ['', 'Revisá esto:', ...auditoria.alertas.map(a => `${iconos[a.nivel]} ${a.texto}`)] : []),
+        '',
+        hayProblemas ? '¿Cargar igual? (Cancelar para corregir primero)' : '¿Cargar?',
+    ].join('\n');
+    if (!confirm(mensaje)) return;
 
     btn.disabled = true;
     btn.dataset.procesando = '1';
@@ -944,9 +1026,9 @@ document.getElementById('btn-tab-estadisticas').addEventListener('click', mostra
 // pensando que ya estaba cubierto, calcularlo línea por línea perdía ese
 // excedente en vez de descontarlo del resto de su deuda (por eso "Resumen"
 // mostraba el saldo correcto —está agrupado por cliente— pero "Deudores" no).
-function calcularDeudaClientes() {
+function calcularDeudaClientes(lista = pedidos) {
     const porCliente = {};
-    pedidos.filter(p => p.estado === '✅').forEach(p => {
+    lista.filter(p => p.estado === '✅').forEach(p => {
         const nombreOriginal = (p.cliente || '').trim();
         if (!nombreOriginal) return;
         const key = nombreOriginal.toLowerCase();
@@ -1880,149 +1962,19 @@ function renderizarListaClientesConfig() {
 // la pestaña "📊 Estadísticas", nunca en vivo: mantiene el uso de Firebase
 // al mínimo. Solo existen para la lista principal (Zapatillas).
 // ----------------------------------------------------------------------------
-function idMes(fecha) { return fecha.toISOString().slice(0, 7); }
+// Fecha/mes en hora LOCAL (toISOString usa UTC: un cierre hecho a las 22 hs en
+// Argentina caía en el día —o el mes— siguiente).
+function fechaLocalISO(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function idMes(fecha) { return fechaLocalISO(fecha).slice(0, 7); }
 
 function formatoFechaLegible(fechaISO) {
     const partes = (fechaISO || '').split('-');
     return partes.length === 3 ? `${partes[2]}/${partes[1]}` : (fechaISO || '?');
 }
 
-async function cargarEstadisticasPro() {
-    const cont = document.getElementById('estadisticas-cuerpo-pro');
-    if (!cont) return;
-    cont.innerHTML = '<p class="ayuda">Cargando...</p>';
-
-    const ahora = new Date();
-    const mesActualId = idMes(ahora);
-    const mesAnteriorId = idMes(new Date(ahora.getFullYear(), ahora.getMonth() - 1, 1));
-
-    try {
-        const [cierresActual, cierresAnterior] = await Promise.all([
-            Store.obtenerCierresDelMes(mesActualId),
-            Store.obtenerCierresDelMes(mesAnteriorId),
-        ]);
-        cont.innerHTML =
-            renderizarMesEstadisticasPro('Este mes', cierresActual) +
-            renderizarMesEstadisticasPro('Mes anterior', cierresAnterior);
-    } catch (e) {
-        cont.innerHTML = '<p class="ayuda">No se pudieron cargar las estadísticas.</p>';
-    }
-}
-
-function renderizarMesEstadisticasPro(titulo, cierresSinOrdenar) {
-    const cierres = (cierresSinOrdenar || []).slice().sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''));
-
-    let facturacionTotal = 0, paresTotal = 0, gananciaTotal = 0, sinCostoTotal = 0;
-    const modelosTotal = {};
-    const porDia = {}; // fecha -> {pares, facturacion, ganancia, cantidadPedidos, modelos: {nombre: cantidad}}
-    cierres.forEach(c => {
-        const fact = parseFloat(c.facturacion) || 0;
-        const pares = parseFloat(c.cantidadPares) || 0;
-        const gc = gananciaDeCierre(c);
-        facturacionTotal += fact;
-        paresTotal += pares;
-        gananciaTotal += gc.ganancia;
-        sinCostoTotal += gc.sinCosto;
-        Object.entries(c.modelosVendidos || {}).forEach(([nombre, cantidad]) => {
-            modelosTotal[nombre] = (modelosTotal[nombre] || 0) + (parseFloat(cantidad) || 0);
-        });
-        if (!porDia[c.fecha]) porDia[c.fecha] = { pares: 0, facturacion: 0, ganancia: 0, cantidadPedidos: 0, modelos: {} };
-        porDia[c.fecha].pares += pares;
-        porDia[c.fecha].facturacion += fact;
-        porDia[c.fecha].ganancia += gc.ganancia;
-        porDia[c.fecha].cantidadPedidos += (parseFloat(c.cantidadPedidos) || 0);
-        Object.entries(c.modelosVendidos || {}).forEach(([nombre, cantidad]) => {
-            porDia[c.fecha].modelos[nombre] = (porDia[c.fecha].modelos[nombre] || 0) + (parseFloat(cantidad) || 0);
-        });
-    });
-
-    const ranking = Object.entries(modelosTotal).map(([nombre, cantidad]) => ({ nombre, cantidad })).sort((a, b) => b.cantidad - a.cantidad);
-    const dias = Object.entries(porDia).sort((a, b) => a[0].localeCompare(b[0]));
-    const maxParesDia = Math.max(1, ...dias.map(([, d]) => d.pares));
-    const promedioPorCierre = cierres.length > 0 ? facturacionTotal / cierres.length : 0;
-
-    // Top de modelos DE ESE DÍA en particular (no del mes entero) — junta los
-    // modelos de todos los cierres que haya ese día, por si hubo más de uno.
-    function topModelosDelDia(mapaModelos, cantidad) {
-        return Object.entries(mapaModelos)
-            .map(([nombre, cant]) => ({ nombre, cantidad: cant }))
-            .sort((a, b) => b.cantidad - a.cantidad)
-            .slice(0, cantidad);
-    }
-
-    return `
-    <div class="card bloque-estadisticas-mes">
-        <h3 class="estadisticas-mes-titulo">${titulo}</h3>
-
-        <div class="kpis">
-            <div class="kpi kpi-info"><span class="kpi-valor">${formatoPesos(facturacionTotal)}</span><span class="kpi-etiqueta">Facturación total</span></div>
-            <div class="kpi kpi-exito"><span class="kpi-valor">${formatoPesos(gananciaTotal)}</span><span class="kpi-etiqueta">Ganancia${sinCostoTotal > 0 ? ` (aprox.: faltan costos de ${sinCostoTotal} par${sinCostoTotal === 1 ? '' : 'es'})` : ''}</span></div>
-            <div class="kpi kpi-neutro"><span class="kpi-valor">${paresTotal}</span><span class="kpi-etiqueta">Pares vendidos</span></div>
-            <div class="kpi kpi-exito"><span class="kpi-valor">${cierres.length}</span><span class="kpi-etiqueta">Cierres de lista</span></div>
-            <div class="kpi kpi-neutro"><span class="kpi-valor">${formatoPesos(promedioPorCierre)}</span><span class="kpi-etiqueta">Promedio por cierre</span></div>
-        </div>
-
-        <h4 class="subtitulo-chico" style="margin-top:18px;">Pares vendidos por día</h4>
-        ${dias.length === 0 ? '<p class="vacio">Sin cierres registrados.</p>' : `
-        <div class="grafico-cierres">
-            ${dias.map(([fecha, d]) => `
-                <div class="barra-dia" title="${formatoFechaLegible(fecha)}: ${d.pares} par(es), ${formatoPesos(d.facturacion)}">
-                    <span class="barra-valor">${d.pares}</span>
-                    <div class="barra" style="height:${Math.max(6, Math.round((d.pares / maxParesDia) * 130))}px;"></div>
-                    <span class="barra-etiqueta">${formatoFechaLegible(fecha)}</span>
-                </div>`).join('')}
-        </div>`}
-
-        <h4 class="subtitulo-chico" style="margin-top:18px;">Ranking de modelos</h4>
-        ${ranking.length === 0 ? '<p class="vacio">Todavía no hay ninguna lista cerrada este período.</p>' : `
-        <div class="tabla-scroll">
-        <table class="tabla-estadisticas">
-            <thead><tr><th>#</th><th>Modelo</th><th>Pares vendidos</th></tr></thead>
-            <tbody>
-                ${ranking.map((m, i) => `<tr><td>${i + 1}</td><td class="celda-modelo">${m.nombre}</td><td>${m.cantidad}</td></tr>`).join('')}
-            </tbody>
-        </table>
-        </div>`}
-
-        <h4 class="subtitulo-chico" style="margin-top:18px;">Ventas por día <span class="opcional">(tocá un día para ver su top)</span></h4>
-        ${dias.length === 0 ? '<p class="vacio">Sin cierres registrados.</p>' : `
-        <div class="tabla-scroll">
-        <table class="tabla-estadisticas">
-            <thead><tr><th>Fecha</th><th>Pedidos</th><th>Pares</th><th>Facturación</th><th>Ganancia</th></tr></thead>
-            <tbody>
-                ${dias.slice().reverse().map(([fecha, d]) => {
-                    const idDetalle = `detalle-dia-${fecha}`;
-                    const top = topModelosDelDia(d.modelos, 5);
-                    return `
-                    <tr class="fila-dia-clickeable" onclick="toggleDetalleDia('${idDetalle}')">
-                        <td>${formatoFechaLegible(fecha)}</td>
-                        <td>${d.cantidadPedidos}</td>
-                        <td>${d.pares}</td>
-                        <td>${formatoPesos(d.facturacion)}</td>
-                        <td class="ganancia-positiva">${formatoPesos(d.ganancia)}</td>
-                    </tr>
-                    <tr id="${idDetalle}" class="fila-detalle-dia">
-                        <td colspan="5">
-                            <strong>Top del ${formatoFechaLegible(fecha)}:</strong>
-                            ${top.length === 0 ? '<p class="vacio">Sin modelos registrados.</p>' : `
-                            <ol class="lista-top-dia">
-                                ${top.map(m => `<li>${m.nombre} <span class="badge-cantidad">×${m.cantidad}</span></li>`).join('')}
-                            </ol>`}
-                        </td>
-                    </tr>`;
-                }).join('')}
-            </tbody>
-        </table>
-        </div>`}
-    </div>`;
-}
-
-window.toggleDetalleDia = function (id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.toggle('abierta');
-};
-
+// (La vista de Estadísticas vive en estadisticas.js)
 // ----------------------------------------------------------------------------
 // INDICADOR DE CONEXIÓN (avisa también si se cortó el internet)
 // ----------------------------------------------------------------------------
