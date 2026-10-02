@@ -63,7 +63,7 @@ const Store = (function () {
     }
 
     // ---- helpers localStorage ------------------------------------------------
-    const LS_KEYS = { pedidos: 'ap_pedidos', clientes: 'ap_clientes', config: 'ap_config', respaldo: 'ap_respaldo_borrado', cierres: 'ap_cierres', listas: 'ap_listas', estadisticasCargadas: 'ap_estadisticas_cargadas' };
+    const LS_KEYS = { pedidos: 'ap_pedidos', clientes: 'ap_clientes', config: 'ap_config', respaldo: 'ap_respaldo_borrado', cierres: 'ap_cierres', listas: 'ap_listas', estadisticasCargadas: 'ap_estadisticas_cargadas', enviosClientes: 'ap_envios_clientes' };
 
     function lsGet(key, porDefecto) {
         try {
@@ -81,6 +81,7 @@ const Store = (function () {
     let respaldoListenersLocal = [];
     let listasListenersLocal = [];
     let estadisticasCargadasListenersLocal = [];
+    let enviosClientesListenersLocal = [];
 
     function emitPedidosLocal() {
         const arr = lsGet(LS_KEYS.pedidos, []);
@@ -104,6 +105,10 @@ const Store = (function () {
         const obj = lsGet(LS_KEYS.listas, {});
         listasListenersLocal.forEach(cb => cb(obj));
     }
+    function emitEnviosClientesLocal() {
+        const obj = lsGet(LS_KEYS.enviosClientes, {});
+        enviosClientesListenersLocal.forEach(cb => cb(obj));
+    }
     function emitEstadisticasCargadasLocal() {
         const obj = lsGet(LS_KEYS.estadisticasCargadas, {});
         estadisticasCargadasListenersLocal.forEach(cb => cb(obj));
@@ -117,6 +122,7 @@ const Store = (function () {
         if (e.key === LS_KEYS.respaldo) emitRespaldoLocal();
         if (e.key === LS_KEYS.listas) emitListasLocal();
         if (e.key === LS_KEYS.estadisticasCargadas) emitEstadisticasCargadasLocal();
+        if (e.key === LS_KEYS.enviosClientes) emitEnviosClientesLocal();
     });
 
     function idLocalNuevo() {
@@ -395,6 +401,41 @@ const Store = (function () {
         }
     }
 
+    // ---- API ENVÍOS POR CLIENTE --------------------------------------------
+    // Cómo recibe cada cliente (Via / Moto) y a dónde: se guarda la primera
+    // vez y se rellena solo la próxima vez que se carga su nombre. Colección
+    // aparte de "clientes" (esa es solo la lista de revendedores).
+    function onEnviosClientes(callback) {
+        if (modo === 'firebase') {
+            return db.collection('envios_clientes').onSnapshot(
+                snap => {
+                    const obj = {};
+                    snap.forEach(d => { obj[d.id] = d.data(); });
+                    callback(obj);
+                },
+                err => console.error('Error escuchando envíos de clientes:', err)
+            );
+        } else {
+            enviosClientesListenersLocal.push(callback);
+            emitEnviosClientesLocal();
+            return () => { enviosClientesListenersLocal = enviosClientesListenersLocal.filter(f => f !== callback); };
+        }
+    }
+
+    function setEnvioCliente(nombre, data) {
+        const id = normalizarIdCliente(nombre);
+        const doc = { nombre, ...data };
+        if (modo === 'firebase') {
+            return db.collection('envios_clientes').doc(id).set(doc, { merge: true });
+        } else {
+            const obj = lsGet(LS_KEYS.enviosClientes, {});
+            obj[id] = { ...(obj[id] || {}), ...doc };
+            lsSet(LS_KEYS.enviosClientes, obj);
+            emitEnviosClientesLocal();
+            return Promise.resolve();
+        }
+    }
+
     // ---- API CONFIG (reglas de precio) ------------------------------------
     function onConfig(callback) {
         if (modo === 'firebase') {
@@ -455,6 +496,7 @@ const Store = (function () {
         onPedidos, addPedido, updatePedido, deletePedido, deleteAllPedidos, restorePedidos,
         onRespaldoBorrado, guardarRespaldoBorrado, borrarRespaldoBorrado,
         onClientes, setCliente, eliminarCliente, normalizarIdCliente,
+        onEnviosClientes, setEnvioCliente,
         onConfig, setConfig,
         registrarCierre, obtenerCierresDelMes,
         onListas, asegurarListaPrincipal, crearLista, eliminarLista,

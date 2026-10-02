@@ -288,6 +288,92 @@ function sincronizarCampoDireccion() {
 }
 envioSelect.addEventListener('change', sincronizarCampoDireccion);
 
+// ----------------------------------------------------------------------------
+// ENVÍO RECORDADO POR CLIENTE
+// Cada cliente que alguna vez tuvo Via o Moto queda guardado (envío +
+// dirección) en la colección "envios_clientes": la próxima vez que se
+// escribe su nombre en el formulario, el envío y la dirección se completan
+// solos. Se mantiene al día solo, mirando los pedidos de TODAS las listas
+// (no importa si el Via/Moto se cargó al pegar, a mano, o con el botón de
+// envío de la tabla). Nunca toca los pedidos: solo lee.
+// ----------------------------------------------------------------------------
+let enviosClientesCache = {};        // id normalizado -> { nombre, envio, direccion }
+let enviosClientesCargados = false;  // hasta no saber lo guardado, no se escribe nada
+let autocompletoEnvioPara = null;    // cliente al que se le completó solo el formulario
+let timeoutSyncEnvios = null;
+
+const esViaOMoto = e => e === 'Via' || e === 'Moto';
+
+// Qué envío corresponde a este cliente: primero lo que ya tiene en las listas
+// (así una línea nueva queda igual que las que ya tiene), si no, lo recordado.
+function envioDeCliente(nombre) {
+    const key = (nombre || '').trim().toLowerCase();
+    if (!key) return null;
+    const recordado = enviosClientesCache[Store.normalizarIdCliente(nombre)];
+    const lineas = todosPedidos.filter(p => (p.cliente || '').trim().toLowerCase() === key);
+
+    const conViaMoto = lineas.filter(p => esViaOMoto(p.envio));
+    if (conViaMoto.length) {
+        const direccion = (conViaMoto.map(p => (p.direccion || '').trim()).find(Boolean)) || (recordado && recordado.direccion) || '';
+        return { envio: conViaMoto[0].envio, direccion };
+    }
+    // Si hoy lo retira, se respeta (no se le pisa con lo recordado).
+    if (lineas.some(p => p.envio === 'Retiro')) return { envio: 'Retiro', direccion: '' };
+    if (recordado && esViaOMoto(recordado.envio)) return { envio: recordado.envio, direccion: recordado.direccion || '' };
+    return null;
+}
+
+function autocompletarEnvioDelCliente() {
+    const nombre = clienteInput.value.trim();
+    if (!nombre) return;
+    const id = Store.normalizarIdCliente(nombre);
+    const datos = envioDeCliente(nombre);
+    if (datos) {
+        envioSelect.value = datos.envio;
+        direccionInput.value = datos.direccion;
+        sincronizarCampoDireccion();
+        autocompletoEnvioPara = id;
+    } else if (autocompletoEnvioPara && autocompletoEnvioPara !== id) {
+        // Se pasó a otro cliente sin envío recordado: que no le quede el
+        // Via/dirección del anterior.
+        envioSelect.value = '';
+        direccionInput.value = '';
+        sincronizarCampoDireccion();
+        autocompletoEnvioPara = null;
+    }
+}
+clienteInput.addEventListener('input', autocompletarEnvioDelCliente);
+clienteInput.addEventListener('change', autocompletarEnvioDelCliente);
+
+// Guarda/actualiza lo recordado de cada cliente según lo que hay en los
+// pedidos. Solo escribe si algo cambió (una dirección vacía nunca pisa una
+// recordada).
+function sincronizarEnviosRecordados() {
+    if (!enviosClientesCargados || typeof Store.setEnvioCliente !== 'function') return;
+    const porCliente = {};
+    todosPedidos.forEach(p => {
+        if (!esViaOMoto(p.envio)) return;
+        const nombre = (p.cliente || '').trim();
+        if (!nombre) return;
+        const id = Store.normalizarIdCliente(nombre);
+        const e = porCliente[id] = porCliente[id] || { nombre, envio: p.envio, direccion: '' };
+        if (!e.direccion && (p.direccion || '').trim()) e.direccion = p.direccion.trim();
+    });
+    Object.entries(porCliente).forEach(([id, e]) => {
+        const guardado = enviosClientesCache[id];
+        const direccion = e.direccion || (guardado && guardado.direccion) || '';
+        if (guardado && guardado.envio === e.envio && (guardado.direccion || '') === direccion) return;
+        enviosClientesCache[id] = { nombre: e.nombre, envio: e.envio, direccion }; // optimista
+        Store.setEnvioCliente(e.nombre, { envio: e.envio, direccion });
+    });
+}
+// Con un pequeño retraso: al cambiar el envío de un cliente se actualizan
+// varias líneas seguidas, y así se guarda una sola vez el resultado final.
+function programarSyncEnvios() {
+    clearTimeout(timeoutSyncEnvios);
+    timeoutSyncEnvios = setTimeout(sincronizarEnviosRecordados, 1500);
+}
+
 function actualizarAutocompletado() {
     const dlClientes = document.getElementById('opciones-clientes');
     const dlModelos = document.getElementById('opciones-modelos');
@@ -300,6 +386,8 @@ function actualizarAutocompletado() {
         .filter(Boolean)
         .sort((a, b) => extraerNumeroTalle(a) - extraerNumeroTalle(b));
 
+    Object.values(enviosClientesCache).forEach(c => { if (c.nombre && !clientesUnicos.includes(c.nombre)) clientesUnicos.push(c.nombre); });
+    clientesUnicos.sort();
     dlClientes.innerHTML = clientesUnicos.map(c => `<option value="${c}">`).join('');
     dlModelos.innerHTML = modelosUnicos.map(m => `<option value="${m}">`).join('');
     dlTalles.innerHTML = tallesUnicos.map(t => `<option value="${t}">`).join('');
@@ -686,9 +774,19 @@ window.alternarEnvio = function (id) {
     // El envío es del CLIENTE, no de cada par: al cambiarlo en una línea se
     // cambia en todas las que ese cliente tenga en esta lista.
     const key = (p.cliente || '').trim().toLowerCase();
+    // Si pasa a Via/Moto y a esa línea le falta la dirección, se completa con
+    // la que ya tenía el cliente (en otra línea, o recordada de antes).
+    const recordado = enviosClientesCache[Store.normalizarIdCliente(p.cliente || '')];
+    const direccionConocida = !esViaOMoto(nuevoEnvio) ? ''
+        : (pedidos.filter(x => (x.cliente || '').trim().toLowerCase() === key).map(x => (x.direccion || '').trim()).find(Boolean)
+            || (recordado && recordado.direccion) || '');
     pedidos
         .filter(x => (x.cliente || '').trim().toLowerCase() === key && (x.envio || '') !== nuevoEnvio)
-        .forEach(x => Store.updatePedido(x.id, { envio: nuevoEnvio }));
+        .forEach(x => {
+            const cambios = { envio: nuevoEnvio };
+            if (direccionConocida && !(x.direccion || '').trim()) cambios.direccion = direccionConocida;
+            Store.updatePedido(x.id, cambios);
+        });
 };
 
 window.resetearPrecioManual = function (id) {
@@ -2081,6 +2179,18 @@ document.addEventListener('DOMContentLoaded', () => {
         Store.onPedidos(arr => {
             todosPedidos = arr;
             recalcularPedidosActivos();
+            programarSyncEnvios();
         });
+
+        // Va después de lo esencial y protegido: si el navegador todavía
+        // tuviera un store.js viejo en caché, la app sigue funcionando igual.
+        if (typeof Store.onEnviosClientes === 'function') {
+            Store.onEnviosClientes(obj => {
+                enviosClientesCache = obj;
+                enviosClientesCargados = true;
+                actualizarAutocompletado();
+                programarSyncEnvios();
+            });
+        }
     });
 });
