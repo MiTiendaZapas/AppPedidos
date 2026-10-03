@@ -441,7 +441,8 @@ function parsearTextoPedido(texto) {
         lineaOrig = lineaOrig.replace(/\bcada\s+un[oa]\b\.?/gi, '').replace(/\bc\/u\b\.?/gi, '').trim();
 
         let talle = null;
-        const matchTalle = lineaOrig.match(/\((\d{2,3}(?:[.,]5)?)(?:\s*\/\s*(\d{2,3}(?:[.,]5)?))?\)/);
+        // Acepta "(39)", "(39/40)" y también "(Talle 39)", "(T39)", "(Nº 39)".
+        const matchTalle = lineaOrig.match(/\(\s*(?:talles?|t|n[º°]|nro\.?|num(?:ero)?)?\s*\.?\s*(\d{2,3}(?:[.,]5)?)(?:\s*\/\s*(\d{2,3}(?:[.,]5)?))?\s*\)/i);
         if (matchTalle) {
             if (matchTalle[2]) {
                 talle = `${matchTalle[1].replace(',', '.')}/${matchTalle[2].replace(',', '.')}`;
@@ -475,7 +476,9 @@ function parsearTextoPedido(texto) {
                 : nombreLimpio.replace(precioInfo.textoOriginal, '');
         }
         if (cantidadInicial === null) nombreLimpio = nombreLimpio.replace(/(^|[^A-Za-zÀ-ÿ])[x×]\s*\d+/gi, '$1');
-        nombreLimpio = nombreLimpio.replace(/\(\s*\d{1,3}(?:[.,]5)?\s*(?:\/\s*\d{1,3}(?:[.,]5)?\s*)?\)/g, '');
+        nombreLimpio = nombreLimpio.replace(/\(\s*(?:talles?|t|n[º°]|nro\.?|num(?:ero)?)?\s*\.?\s*\d{1,3}(?:[.,]5)?\s*(?:\/\s*\d{1,3}(?:[.,]5)?\s*)?\)/gi, '');
+        // "Talle 39" suelto (sin paréntesis) tampoco es parte del nombre del modelo.
+        nombreLimpio = nombreLimpio.replace(/\btalles?\s*\.?\s*\d{2,3}(?:[.,]5)?(?:\s*\/\s*\d{2,3}(?:[.,]5)?)?/gi, '');
         nombreLimpio = nombreLimpio.replace(/[\/\\]/g, ' ');
         // Incluye los espacios en la misma limpieza final (no solo la
         // puntuación): si el precio venía seguido de ", x2" (coma antes de
