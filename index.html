@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sistema de Pedidos - Zapatillas</title>
-    <link rel="stylesheet" href="style.css?v=20261003a">
+    <link rel="stylesheet" href="style.css?v=20261006a">
 </head>
 <body>
 
@@ -166,10 +166,13 @@
                     <input type="search" id="buscador-lista" placeholder="🔎 Buscar por cliente o modelo...">
                 </div>
 
+                <div id="progreso-deposito" class="progreso-deposito" style="display:none;"></div>
+
                 <div class="tabla-scroll">
                     <table id="tabla-pedidos">
                         <thead>
                             <tr>
+                                <th class="columna-deposito" title="Depósito: tocá la casilla para marcar el par como agarrado">✔</th>
                                 <th>Cliente</th>
                                 <th>Modelo</th>
                                 <th>Talle</th>
@@ -329,10 +332,10 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
 
-    <script src="firebase-config.js?v=20261003a"></script>
-    <script src="pricing.js?v=20261003a"></script>
-    <script src="store.js?v=20261003a"></script>
-    <script src="app.js?v=20261003a"></script>
-    <script src="estadisticas.js?v=20261003a"></script>
+    <script src="firebase-config.js?v=20261006a"></script>
+    <script src="pricing.js?v=20261006a"></script>
+    <script src="store.js?v=20261006a"></script>
+    <script src="app.js?v=20261006a"></script>
+    <script src="estadisticas.js?v=20261006a"></script>
 </body>
 </html>

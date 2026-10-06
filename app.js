@@ -132,7 +132,15 @@ function importeDeLinea(precioUnitario, cantidad) {
 function recargoDeLinea(p) {
     return p.pago === 'Cambio' ? (parseFloat(precioConfig ? precioConfig.recargoCambio : 0) || 0) : 0;
 }
+// Depósito: ''=sin marcar, 'ok'=agarrado, 'cambiar'=no está el modelo (hay que
+// cambiarlo), 'faltante'=no lo trajo. Un par que NO se trajo no se vendió: no
+// se cobra, no se factura y no entra en Estadísticas (si después aparece, se
+// vuelve a marcar y suma de nuevo).
+const esFaltante = p => p.deposito === 'faltante';
+const esVentaFirme = p => p.estado === '✅' && !esFaltante(p);
+
 function deudaDeLinea(p) {
+    if (esFaltante(p)) return 0;
     return (parseFloat(p.importe) || 0) + recargoDeLinea(p);
 }
 
@@ -142,6 +150,7 @@ function deudaDeLinea(p) {
 // ganancia es el recargo entero. Devuelve null si no se puede calcular (la
 // categoría todavía no tiene costo cargado, o la línea no tiene precio).
 function gananciaDeLinea(p) {
+    if (esFaltante(p)) return 0;
     if (p.pago === 'Cambio') return recargoDeLinea(p);
     const importe = parseFloat(p.importe) || 0;
     if (importe <= 0 || !precioConfig) return null;
@@ -846,7 +855,7 @@ document.getElementById('btn-borrar-todo').addEventListener('click', () => {
 // distingue cobrado de pendiente, y no cuenta los "Cambio" de talle como
 // venta de un modelo. Devuelve true si de verdad archivó algo.
 async function registrarEstadisticasDeLista(lista) {
-    const confirmados = lista.filter(p => p.estado === '✅');
+    const confirmados = lista.filter(esVentaFirme);
     if (confirmados.length === 0) return false;
 
     const ahora = new Date();
@@ -919,7 +928,7 @@ function lineaParaCierre(p) {
 // (precios en cero o ridículos, líneas con pérdida, márgenes raros...). Los
 // errores de carga se detectan ACÁ, antes de que entren a Estadísticas.
 function auditarListaParaCierre(lista) {
-    const confirmados = lista.filter(p => p.estado === '✅');
+    const confirmados = lista.filter(esVentaFirme);
     const ventas = confirmados.filter(p => p.pago !== 'Cambio');
     const facturacion = confirmados.reduce((s, p) => s + deudaDeLinea(p), 0);
     const pares = ventas.reduce((s, p) => s + (parseInt(p.cantidad) || 0), 0);
@@ -943,7 +952,13 @@ function auditarListaParaCierre(lista) {
         alertas.push({ nivel: 'aviso', texto: `Margen de ${(margen * 100).toFixed(1)}%, fuera de lo habitual (5%–30%): revisá los precios.` });
     }
 
-    const noConfirmados = lista.length - confirmados.length;
+    const aCambiar = lista.filter(p => p.estado === '✅' && p.deposito === 'cambiar').length;
+    if (aCambiar > 0) alertas.push({ nivel: 'aviso', texto: `${aCambiar} par(es) en NARANJA (no estaba el modelo, hay que cambiarlo): entran al cierre con el modelo actual.` });
+    const faltantes = lista.filter(p => p.estado === '✅' && esFaltante(p)).length;
+    if (faltantes > 0) alertas.push({ nivel: 'info', texto: `${faltantes} par(es) en ROJO (no se trajeron): no entran al cierre.` });
+    const sinMarcar = lista.filter(p => p.estado === '✅' && !p.deposito).length;
+    if (sinMarcar > 0) alertas.push({ nivel: 'info', texto: `${sinMarcar} par(es) confirmados todavía sin marcar en el depósito.` });
+    const noConfirmados = lista.filter(p => p.estado !== '✅').length;
     if (noConfirmados > 0) alertas.push({ nivel: 'info', texto: `${noConfirmados} pedido(s) sin confirmar (no entran al cierre).` });
 
     return { confirmados: confirmados.length, pares, facturacion, ganancia: g.ganancia, margen, alertas };
@@ -1153,7 +1168,7 @@ function actualizarResumen() {
     const confirmados = pedidos.filter(p => p.estado === '✅');
 
     // Los pedidos de CAMBIO no cuentan como pares confirmados nuevos.
-    const totalPares = confirmados.filter(p => p.pago !== 'Cambio').reduce((s, p) => s + (parseInt(p.cantidad) || 0), 0);
+    const totalPares = confirmados.filter(p => p.pago !== 'Cambio' && !esFaltante(p)).reduce((s, p) => s + (parseInt(p.cantidad) || 0), 0);
     totalSpan.textContent = totalPares;
 
     let totalFacturado = 0;
@@ -1189,10 +1204,10 @@ function actualizarResumen() {
                 cantidad: 0, total: 0, pagado: 0, detalles: []
             };
         }
-        if (p.pago !== 'Cambio') conteoClientes[key].cantidad += (parseInt(p.cantidad) || 0);
+        if (p.pago !== 'Cambio' && !esFaltante(p)) conteoClientes[key].cantidad += (parseInt(p.cantidad) || 0);
         conteoClientes[key].total += deudaDeLinea(p);
         conteoClientes[key].pagado += parseFloat(p.pagoMonto) || 0;
-        conteoClientes[key].detalles.push({ modelo: p.modelo, talle: p.talle, cantidad: p.cantidad, importe: deudaDeLinea(p), esCambio: p.pago === 'Cambio' });
+        conteoClientes[key].detalles.push({ modelo: p.modelo, talle: p.talle, cantidad: p.cantidad, importe: deudaDeLinea(p), esCambio: p.pago === 'Cambio', faltante: esFaltante(p) });
     });
 
     const clientesArray = Object.values(conteoClientes).sort((a, b) => a.nombre.localeCompare(b.nombre));
@@ -1215,7 +1230,7 @@ function actualizarResumen() {
                 <ul id="detalles-${index}" class="cliente-detalles">
                     ${c.detalles.map(d => `
                         <li>
-                            <span>${d.esCambio ? '🔁 ' : ''}👟 ${d.modelo} ${d.cantidad > 1 ? '×' + d.cantidad : ''}</span>
+                            <span>${d.esCambio ? '🔁 ' : ''}👟 ${d.modelo} ${d.cantidad > 1 ? '×' + d.cantidad : ''}${d.faltante ? ' <strong style="color:var(--danger);">· no lo trajo</strong>' : ''}</span>
                             <span class="detalle-talle">Talle ${d.talle}${d.importe ? ' · ' + formatoPesos(d.importe) : ''}</span>
                         </li>
                     `).join('')}
@@ -1434,7 +1449,7 @@ window.toggleDetalles = function (id) {
 // afuera de la lista y del total (para que el total coincida con la suma de
 // las líneas que se ven).
 function textoListaCliente(c) {
-    const pares = c.detalles.filter(d => !d.esCambio);
+    const pares = c.detalles.filter(d => !d.esCambio && !d.faltante);
     const lineas = pares.map(d => `${d.modelo} (${d.talle})${d.cantidad > 1 ? ' x' + d.cantidad : ''} ${formatoPesos(d.importe)}`);
     const totalPares = pares.reduce((s, d) => s + (parseInt(d.cantidad) || 1), 0);
     const totalSinCambio = pares.reduce((s, d) => s + (parseFloat(d.importe) || 0), 0);
@@ -1510,7 +1525,7 @@ function renderizarTabla() {
     }
 
     if (filtro && copia.length === 0) {
-        listaBody.innerHTML = `<tr><td colspan="12" class="vacio-fila">No se encontraron pedidos para "${filtroTexto}".</td></tr>`;
+        listaBody.innerHTML = `<tr><td colspan="13" class="vacio-fila">No se encontraron pedidos para "${filtroTexto}".</td></tr>`;
     }
 
     copia.forEach((pedido, indice) => {
@@ -1518,11 +1533,12 @@ function renderizarTabla() {
         if (indice === 0 || esGrupoActual !== esClienteGrupo(copia[indice - 1].cliente)) {
             const filaSeparador = document.createElement('tr');
             filaSeparador.className = 'fila-separador-grupo-tr';
-            filaSeparador.innerHTML = `<td colspan="12" class="fila-separador-grupo">${esGrupoActual ? '👥 Grupo / revendedores (mayorista)' : '🛍️ Clientes comunes (minorista)'}</td>`;
+            filaSeparador.innerHTML = `<td colspan="13" class="fila-separador-grupo">${esGrupoActual ? '👥 Grupo / revendedores (mayorista)' : '🛍️ Clientes comunes (minorista)'}</td>`;
             listaBody.appendChild(filaSeparador);
         }
 
         const fila = document.createElement('tr');
+        if (pedido.deposito) fila.className = 'fila-dep-' + pedido.deposito;
 
         const deuda = deudaDeLinea(pedido);
         const pagado = parseFloat(pedido.pagoMonto) || 0;
@@ -1536,6 +1552,7 @@ function renderizarTabla() {
         const ganancia = gananciaDeLinea(pedido);
 
         fila.innerHTML = `
+            <td class="columna-deposito"><button type="button" class="dep-check dep-${pedido.deposito || 'vacio'}" title="${tituloDeposito(pedido.deposito)}" onclick="tocarDeposito('${pedido.id}', this)">${simboloDeposito(pedido.deposito)}</button></td>
             <td contenteditable="true" class="celda-editable" onblur="guardarEdicion('${pedido.id}', 'cliente', this)">${pedido.cliente}</td>
             <td contenteditable="true" class="celda-editable" onblur="guardarEdicion('${pedido.id}', 'modelo', this)" title="${pedido.categoria || ''}">${pedido.modelo}</td>
             <td contenteditable="true" class="celda-editable" onblur="guardarEdicion('${pedido.id}', 'talle', this)">${pedido.talle}</td>
@@ -1555,10 +1572,91 @@ function renderizarTabla() {
         listaBody.appendChild(fila);
     });
 
+    actualizarProgresoDeposito();
     actualizarResumen();
     actualizarEnvios();
     actualizarDireccionesPendientes();
     actualizarDeudores();
+}
+
+// ----------------------------------------------------------------------------
+// DEPÓSITO: casilla de control por pedido (la ven las dos computadoras)
+//   1 toque en una casilla vacía  -> 🟢 agarrado (la fila se pone gris)
+//   toque en una ya marcada       -> menú: 🟠 hay que cambiarlo / 🔴 no lo trajo /
+//                                    🟢 agarrado / ⬜ desmarcar
+// ----------------------------------------------------------------------------
+function simboloDeposito(v) { return v === 'ok' ? '✓' : v === 'cambiar' ? '↔' : v === 'faltante' ? '✕' : ''; }
+function tituloDeposito(v) {
+    return v === 'ok' ? 'Agarrado en el depósito (tocá para cambiar)'
+        : v === 'cambiar' ? 'No está el modelo: hay que cambiarlo (tocá para cambiar)'
+        : v === 'faltante' ? 'No lo trajo: no se cobra ni suma a Estadísticas (tocá para cambiar)'
+        : 'Tocá para marcar como agarrado';
+}
+
+const OPCIONES_MENU_DEPOSITO = [
+    { valor: 'ok', texto: '🟢 Agarrado' },
+    { valor: 'cambiar', texto: '🟠 No está el modelo: hay que cambiarlo' },
+    { valor: 'faltante', texto: '🔴 No lo trajo (no se cobra)' },
+    { valor: '', texto: '⬜ Desmarcar' },
+];
+
+function cerrarMenuDeposito() {
+    const m = document.getElementById('menu-deposito');
+    if (m) m.remove();
+}
+
+window.tocarDeposito = function (id, boton) {
+    const p = pedidos.find(x => x.id === id); if (!p) return;
+    const actual = p.deposito || '';
+    cerrarMenuDeposito();
+    if (actual === '') { Store.updatePedido(id, { deposito: 'ok' }); return; }
+
+    const menu = document.createElement('div');
+    menu.id = 'menu-deposito';
+    menu.className = 'menu-deposito';
+    menu.innerHTML = OPCIONES_MENU_DEPOSITO.filter(o => o.valor !== actual).map(o =>
+        `<button type="button" data-valor="${o.valor}">${o.texto}</button>`).join('');
+    document.body.appendChild(menu);
+
+    const r = boton.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    menu.style.top = Math.min(r.bottom + 4, window.innerHeight - menu.offsetHeight - 8) + 'px';
+
+    menu.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+        const nuevo = b.dataset.valor;
+        cerrarMenuDeposito();
+        // El pedido pudo haberse borrado mientras el menú estaba abierto.
+        if (pedidos.some(x => x.id === id)) Store.updatePedido(id, { deposito: nuevo });
+    }));
+};
+document.addEventListener('click', e => { if (!e.target.closest('#menu-deposito') && !e.target.closest('.dep-check')) cerrarMenuDeposito(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') cerrarMenuDeposito(); });
+window.addEventListener('scroll', cerrarMenuDeposito, true);
+
+// Contador de avance: sobre los pares confirmados (✅) de la lista que se ve.
+function actualizarProgresoDeposito() {
+    const el = document.getElementById('progreso-deposito');
+    if (!el) return;
+    const base = pedidos.filter(p => p.estado === '✅');
+    if (base.length === 0) { el.style.display = 'none'; return; }
+    const ok = base.filter(p => p.deposito === 'ok').length;
+    const cambiar = base.filter(p => p.deposito === 'cambiar').length;
+    const falta = base.filter(p => p.deposito === 'faltante').length;
+    const pendientes = base.length - ok - cambiar - falta;
+    const pc = n => (n / base.length * 100).toFixed(2) + '%';
+    el.style.display = '';
+    el.innerHTML = `
+        <div class="progreso-deposito-texto">
+            <strong>📦 Depósito: ${ok}/${base.length} agarrados</strong>
+            ${cambiar ? `<span class="dep-etq dep-etq-cambiar">🟠 ${cambiar} a cambiar</span>` : ''}
+            ${falta ? `<span class="dep-etq dep-etq-faltante">🔴 ${falta} no lo trajo</span>` : ''}
+            ${pendientes ? `<span class="dep-etq">⬜ ${pendientes} sin buscar</span>` : (cambiar || falta ? '' : '<span class="dep-etq dep-etq-ok">✅ Todo listo</span>')}
+        </div>
+        <div class="progreso-deposito-barra">
+            <span class="dep-seg dep-seg-ok" style="width:${pc(ok)}"></span>
+            <span class="dep-seg dep-seg-cambiar" style="width:${pc(cambiar)}"></span>
+            <span class="dep-seg dep-seg-faltante" style="width:${pc(falta)}"></span>
+        </div>`;
 }
 
 // ----------------------------------------------------------------------------
@@ -1605,7 +1703,7 @@ document.getElementById('btn-imagen').addEventListener('click', () => {
     const filas = Array.from(tabla.querySelectorAll('tr')).filter(f => !f.classList.contains('fila-separador-grupo-tr'));
     filas.forEach(fila => { if (fila.lastElementChild) fila.lastElementChild.style.display = 'none'; });
 
-    const columnasPrivadas = tabla.querySelectorAll('.columna-privada');
+    const columnasPrivadas = tabla.querySelectorAll('.columna-privada, .columna-deposito');
     columnasPrivadas.forEach(col => col.style.display = 'none');
 
     // El encabezado queda "pegado" arriba (position: sticky) mientras

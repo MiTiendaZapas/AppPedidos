@@ -484,6 +484,42 @@ body[data-theme="dark"] .badge-warning { color: var(--warning); }
 .nav-listas-separador { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
 
 /* ============================================================================
+   DEPÓSITO: casilla de control por pedido + contador de avance
+   ============================================================================ */
+.columna-deposito { width: 44px; min-width: 44px; text-align: center; padding: 4px; }
+.dep-check { width: 28px; height: 28px; border-radius: 7px; border: 2px solid var(--text-faint); background: var(--surface); color: #fff; font-size: 16px; font-weight: 800; line-height: 1; cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.dep-check:hover { border-color: var(--success); }
+.dep-check.dep-ok { background: var(--success); border-color: var(--success); }
+.dep-check.dep-cambiar { background: var(--warning); border-color: var(--warning); }
+.dep-check.dep-faltante { background: var(--danger); border-color: var(--danger); }
+
+/* La fila se ve según el estado (la casilla siempre queda a todo color). */
+tbody tr.fila-dep-ok td:not(.columna-deposito) { background: var(--neutral-bg); opacity: .5; }
+tbody tr.fila-dep-cambiar td:not(.columna-deposito) { background: var(--warning-bg); }
+tbody tr.fila-dep-faltante td:not(.columna-deposito) { background: var(--danger-bg); }
+tbody tr.fila-dep-faltante td:not(.columna-deposito):not(.columna-accion) { text-decoration: line-through; text-decoration-color: var(--danger); }
+
+/* En la foto para el depósito, las filas salen como siempre (sin colores). */
+#tabla-pedidos.tabla-modo-foto tr[class^="fila-dep-"] td { opacity: 1 !important; background: transparent !important; text-decoration: none !important; }
+
+.menu-deposito { position: fixed; z-index: 10000; display: flex; flex-direction: column; min-width: 230px; padding: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); }
+.menu-deposito button { text-align: left; padding: 11px 12px; border: none; background: none; border-radius: var(--radius-sm); font: inherit; font-size: 14px; font-weight: 600; color: var(--text); cursor: pointer; }
+.menu-deposito button:hover { background: var(--primary-bg); }
+
+.progreso-deposito { padding: 10px 16px 12px; border-bottom: 1px solid var(--border); }
+.progreso-deposito-texto { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 13px; margin-bottom: 7px; }
+.dep-etq { font-size: 12px; font-weight: 700; color: var(--text-muted); }
+.dep-etq-cambiar { color: var(--warning); }
+.dep-etq-faltante { color: var(--danger); }
+.dep-etq-ok { color: var(--success); }
+.progreso-deposito-barra { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: var(--neutral-bg); }
+.dep-seg { display: block; height: 100%; }
+.dep-seg-ok { background: var(--success); }
+.dep-seg-cambiar { background: var(--warning); }
+.dep-seg-faltante { background: var(--danger); }
+
+
+/* ============================================================================
    ESTADÍSTICAS — panel propio (estadisticas.js)
    ============================================================================ */
 :root { --est-fact: #2a78d6; --est-gan: #1baf7a; }
