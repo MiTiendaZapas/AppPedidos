@@ -1601,30 +1601,47 @@ const OPCIONES_MENU_DEPOSITO = [
 ];
 
 function cerrarMenuDeposito() {
-    const m = document.getElementById('menu-deposito');
-    if (m) m.remove();
+    ['menu-deposito', 'menu-deposito-fondo'].forEach(id => { const m = document.getElementById(id); if (m) m.remove(); });
 }
+
+// Vibración corta al marcar (en los celulares que la soportan): confirma el
+// toque sin tener que mirar la pantalla.
+function vibrar() { try { if (navigator.vibrate) navigator.vibrate(15); } catch (e) { /* no soportado */ } }
 
 window.tocarDeposito = function (id, boton) {
     const p = pedidos.find(x => x.id === id); if (!p) return;
     const actual = p.deposito || '';
     cerrarMenuDeposito();
-    if (actual === '') { Store.updatePedido(id, { deposito: 'ok' }); return; }
+    if (actual === '') { vibrar(); Store.updatePedido(id, { deposito: 'ok' }); return; }
 
+    const hoja = esPantallaChica();
     const menu = document.createElement('div');
     menu.id = 'menu-deposito';
-    menu.className = 'menu-deposito';
-    menu.innerHTML = OPCIONES_MENU_DEPOSITO.filter(o => o.valor !== actual).map(o =>
-        `<button type="button" data-valor="${o.valor}">${o.texto}</button>`).join('');
+    menu.className = 'menu-deposito' + (hoja ? ' menu-deposito-hoja' : '');
+    menu.innerHTML = (hoja ? `<div class="menu-deposito-titulo">${escaparHtml((p.cliente || '') + ' · ' + (p.modelo || '') + ' (' + (p.talle || '') + ')')}</div>` : '')
+        + OPCIONES_MENU_DEPOSITO.filter(o => o.valor !== actual).map(o =>
+            `<button type="button" data-valor="${o.valor}">${o.texto}</button>`).join('');
+    if (hoja) {
+        // En el celular el menú sale desde abajo (al alcance del pulgar, sin
+        // quedar tapado por el dedo) con un fondo que se toca para cerrar.
+        const fondo = document.createElement('div');
+        fondo.id = 'menu-deposito-fondo';
+        fondo.className = 'menu-deposito-fondo';
+        fondo.addEventListener('click', cerrarMenuDeposito);
+        document.body.appendChild(fondo);
+    }
     document.body.appendChild(menu);
 
-    const r = boton.getBoundingClientRect();
-    menu.style.left = Math.max(4, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
-    menu.style.top = Math.min(r.bottom + 4, window.innerHeight - menu.offsetHeight - 8) + 'px';
+    if (!hoja) {
+        const r = boton.getBoundingClientRect();
+        menu.style.left = Math.max(4, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+        menu.style.top = Math.min(r.bottom + 4, window.innerHeight - menu.offsetHeight - 8) + 'px';
+    }
 
     menu.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
         const nuevo = b.dataset.valor;
         cerrarMenuDeposito();
+        vibrar();
         // El pedido pudo haberse borrado mientras el menú estaba abierto.
         if (pedidos.some(x => x.id === id)) Store.updatePedido(id, { deposito: nuevo });
     }));
@@ -1632,6 +1649,33 @@ window.tocarDeposito = function (id, boton) {
 document.addEventListener('click', e => { if (!e.target.closest('#menu-deposito') && !e.target.closest('.dep-check')) cerrarMenuDeposito(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') cerrarMenuDeposito(); });
 window.addEventListener('scroll', cerrarMenuDeposito, true);
+
+// MODO DEPÓSITO: pensado para el celular. Deja solo lo necesario para buscar
+// (casilla grande, cliente, modelo y talle), con letra grande, sin el
+// formulario ni columnas de plata, sin la ✕ de borrar (para no borrar un
+// pedido con el dedo) y sin que un toque en un nombre abra el teclado. Se
+// activa solo en pantallas chicas la primera vez; la elección se recuerda en
+// cada dispositivo (no se sincroniza: el celular del depósito y tu compu
+// pueden estar en modos distintos).
+const CLAVE_MODO_DEPOSITO = 'ap_modo_deposito';
+function esPantallaChica() { return window.matchMedia('(max-width: 700px)').matches; }
+function aplicarModoDeposito(activo, recordar) {
+    document.body.classList.toggle('modo-deposito', activo);
+    const btn = document.getElementById('btn-modo-deposito');
+    if (btn) {
+        btn.classList.toggle('btn-modo-activo', activo);
+        btn.textContent = activo ? '📋 Ver todo' : '📦 Modo depósito';
+        btn.title = activo ? 'Volver a la vista completa (formulario, precios, etc.)' : 'Vista simple para el celular: solo casilla, cliente, modelo y talle';
+    }
+    if (recordar) { try { localStorage.setItem(CLAVE_MODO_DEPOSITO, activo ? '1' : '0'); } catch (e) { /* sin almacenamiento */ } }
+}
+(function iniciarModoDeposito() {
+    let guardado = null;
+    try { guardado = localStorage.getItem(CLAVE_MODO_DEPOSITO); } catch (e) { /* sin almacenamiento */ }
+    aplicarModoDeposito(guardado === null ? esPantallaChica() : guardado === '1', false);
+    const btn = document.getElementById('btn-modo-deposito');
+    if (btn) btn.addEventListener('click', () => aplicarModoDeposito(!document.body.classList.contains('modo-deposito'), true));
+})();
 
 // Contador de avance: sobre los pares confirmados (✅) de la lista que se ve.
 function actualizarProgresoDeposito() {
@@ -1696,6 +1740,11 @@ document.getElementById('btn-imagen').addEventListener('click', () => {
     const eraOscuro = document.body.getAttribute('data-theme') === 'dark';
     if (eraOscuro) document.body.setAttribute('data-theme', 'light');
 
+    // La foto lleva todas las columnas: si está el modo depósito, se apaga
+    // mientras se saca y se vuelve a prender después.
+    const eraModoDeposito = document.body.classList.contains('modo-deposito');
+    if (eraModoDeposito) document.body.classList.remove('modo-deposito');
+
     const tabla = document.getElementById('tabla-pedidos');
     // Las filas separadoras de grupo/minorista tienen una sola celda (colspan
     // completo): si se las trata igual que al resto, "ocultar la última
@@ -1744,6 +1793,7 @@ document.getElementById('btn-imagen').addEventListener('click', () => {
             encabezados.forEach(th => th.style.position = '');
             tabla.classList.remove('tabla-modo-foto');
             if (eraOscuro) document.body.setAttribute('data-theme', 'dark');
+            if (eraModoDeposito) document.body.classList.add('modo-deposito');
 
             const enlace = document.createElement('a');
             enlace.download = 'Pedidos_Para_Deposito.png';

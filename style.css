@@ -519,6 +519,39 @@ tbody tr.fila-dep-faltante td:not(.columna-deposito):not(.columna-accion) { text
 .dep-seg-faltante { background: var(--danger); }
 
 
+/* ----------------------------------------------------------------------------
+   Celular y MODO DEPÓSITO: objetivos táctiles de 44px o más, un solo toque
+   ---------------------------------------------------------------------------- */
+.dep-check, .menu-deposito button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+@media (max-width: 700px) {
+    .columna-deposito { width: 60px; min-width: 60px; }
+    .dep-check { width: 44px; height: 44px; font-size: 22px; border-radius: 10px; }
+}
+
+.menu-deposito-fondo { position: fixed; inset: 0; z-index: 9999; background: rgba(15, 23, 42, .45); }
+.menu-deposito-hoja { left: 0; right: 0; bottom: 0; top: auto; min-width: 0; border-radius: 18px 18px 0 0; border-bottom: none; padding: 8px 10px calc(14px + env(safe-area-inset-bottom)); }
+.menu-deposito-titulo { padding: 10px 12px 12px; font-size: 13px; font-weight: 700; color: var(--text-muted); text-align: center; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.menu-deposito-hoja button { padding: 17px 14px; font-size: 16px; }
+
+.btn-modo-activo { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+body.modo-deposito .panel-form { display: none; }
+body.modo-deposito #tabla-pedidos { display: table; width: 100%; }
+body.modo-deposito #tabla-pedidos thead { display: none; }
+body.modo-deposito #tabla-pedidos th:nth-child(n+5),
+body.modo-deposito #tabla-pedidos td:nth-child(n+5) { display: none; }
+body.modo-deposito #tabla-pedidos tbody td { white-space: normal; font-size: 15px; padding: 10px 8px; text-align: left; overflow-wrap: break-word; }
+body.modo-deposito #tabla-pedidos tbody td:nth-child(2) { min-width: 108px; }
+body.modo-deposito #tabla-pedidos tbody td.columna-deposito { text-align: center; padding: 8px 4px; }
+body.modo-deposito #tabla-pedidos tbody td:nth-child(4) { text-align: center; font-weight: 800; white-space: nowrap; }
+body.modo-deposito .celda-editable { pointer-events: none; user-select: none; -webkit-user-select: none; }
+body.modo-deposito .dep-check { width: 44px; height: 44px; font-size: 22px; border-radius: 10px; }
+body.modo-deposito .columna-deposito { width: 60px; min-width: 60px; }
+/* La barra de arriba deja de ser fija en este modo: ocupaba un 18% de la
+   pantalla del celular, y así el contador queda pegado arriba. */
+body.modo-deposito .topbar { position: static; }
+body.modo-deposito .progreso-deposito { position: sticky; top: 0; z-index: 20; background: var(--surface); box-shadow: 0 2px 6px rgba(15, 23, 42, .12); }
+
 /* ============================================================================
    ESTADÍSTICAS — panel propio (estadisticas.js)
    ============================================================================ */
