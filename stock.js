@@ -45,6 +45,61 @@
 
     function activos() { return Object.entries(S.modelos).filter(([, m]) => !m.eliminado); }
 
+    // ---------- catálogo de la tienda (solo lectura) -------------------------
+    // La tienda publica su catálogo en un archivo público. Se lo usa para:
+    //  • sugerir los nombres EXACTOS que ya existen (si el nombre coincide, la tienda junta
+    //    el stock de casa con el del proveedor en un solo producto; si hay un error de
+    //    tipeo, se crea un producto aparte);
+    //  • mostrar la foto de la tienda cuando el modelo todavía no tiene foto propia;
+    //  • avisar si el modelo va a salir SIN foto en la tienda.
+    const URL_CATALOGO = 'https://mitiendazapas.github.io/catalogo/productos.json';
+    const BASE_CATALOGO = 'https://mitiendazapas.github.io/catalogo/';
+    const C = { lista: null, porClave: {}, promesa: null };
+
+    // Misma idea que normalize() del sincronizador: sin tildes, minúsculas, espacios prolijos.
+    function claveCat(s) {
+        return String(s || '').replace(/\u00a0/g, ' ').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase().replace(/\s*\/\s*/g, '/').replace(/\s+/g, ' ').trim();
+    }
+    function cargarCatalogo() {
+        if (C.promesa) return C.promesa;
+        C.promesa = fetch(URL_CATALOGO, { cache: 'no-cache' })
+            .then(r => { if (!r.ok) throw new Error('catálogo ' + r.status); return r.json(); })
+            .then(d => {
+                const items = Array.isArray(d) ? d : (d.productos || d.products || []);
+                C.lista = items.filter(p => p && p.name).map(p => ({
+                    nombre: p.name, clave: claveCat(p.name),
+                    foto: p.images && p.images[0] ? BASE_CATALOGO + (p.images[0].sm || p.images[0].lg || '') : '',
+                    fotoGrande: p.images && p.images[0] ? BASE_CATALOGO + (p.images[0].lg || p.images[0].sm || '') : '',
+                }));
+                C.porClave = {};
+                C.lista.forEach(p => { C.porClave[p.clave] = p; });
+                const v = document.getElementById('vista-stock');
+                if (v && v.style.display !== 'none') render();
+                const dl = document.getElementById('stk-cat-lista');
+                if (dl) dl.innerHTML = C.lista.map(p => `<option value="${esc(p.nombre)}">`).join('');
+                return C.lista;
+            })
+            .catch(e => { console.warn('No se pudo leer el catálogo de la tienda:', e); C.lista = []; C.promesa = null; return []; });
+        return C.promesa;
+    }
+    const enCatalogo = nombre => C.porClave[claveCat(nombre)] || null;
+    const tieneFotoPropia = m => !!(m.fotoMini || m.fotoVersion || m.fotoRuta);
+    // Foto que se va a ver en la tienda: la propia, o la que ya tenga el catálogo con ese nombre.
+    function fotoDeTienda(m) { const c = enCatalogo(m.nombre); return c && c.foto ? c : null; }
+
+    // Nombres parecidos del catálogo (por palabras en común), para corregir errores de tipeo.
+    function parecidos(nombre, max) {
+        if (!C.lista) return [];
+        const a = new Set(claveCat(nombre).split(/[\s/]+/).filter(w => w.length > 1));
+        if (a.size === 0) return [];
+        return C.lista.map(p => {
+            const b = new Set(p.clave.split(/[\s/]+/).filter(w => w.length > 1));
+            let comunes = 0; a.forEach(w => { if (b.has(w) || [...b].some(x => x.startsWith(w) && w.length >= 3)) comunes++; });
+            return { p, score: comunes / Math.max(a.size, b.size) };
+        }).filter(x => x.score >= 0.5 && x.p.clave !== claveCat(nombre)).sort((x, y) => y.score - x.score).slice(0, max || 3).map(x => x.p);
+    }
+
     // ---------- aviso (toast) ------------------------------------------------
     let timeoutAviso = null;
     function aviso(texto, accion) {
@@ -180,7 +235,11 @@
     function abrirNuevo() {
         const h = abrirHoja(`
             <h3 class="stk-h3">＋ Nuevo modelo</h3>
-            <label class="stk-campo">Nombre del modelo<input id="stk-n-nombre" type="text" placeholder="Ej: Jordan 4 retro caramelo" autocomplete="off"></label>
+            <label class="stk-campo">Nombre del modelo <span class="stk-ayuda">(si ya está en la tienda, elegilo de la lista: así se junta con ese producto)</span>
+                <input id="stk-n-nombre" type="text" list="stk-cat-lista" placeholder="Ej: Jordan 4 retro caramelo" autocomplete="off">
+                <datalist id="stk-cat-lista">${(C.lista || []).map(p => `<option value="${esc(p.nombre)}">`).join('')}</datalist>
+            </label>
+            <div id="stk-n-estado" class="stk-estado-nombre"></div>
             <label class="stk-campo">Tipo
                 <select id="stk-n-tipo"><option value="zapatillas">Zapatillas</option><option value="indumentaria">Indumentaria</option></select>
             </label>
@@ -195,14 +254,45 @@
                 <button type="button" class="btn btn-primario" data-acc="crear">Crear modelo</button>
             </div>`);
         h.querySelector('#stk-n-nombre').focus();
+        cargarCatalogo().then(() => estadoNombre(h));
+        const hayFoto = () => !!h.querySelector('#stk-n-foto').files[0];
+        h.querySelector('#stk-n-nombre').addEventListener('input', () => estadoNombre(h));
+        h.querySelector('#stk-n-foto').addEventListener('change', () => estadoNombre(h));
         h.querySelector('[data-acc="cerrar"]').addEventListener('click', cerrarHoja);
         h.querySelector('[data-acc="crear"]').addEventListener('click', async ev => {
+            const nombreIngresado = h.querySelector('#stk-n-nombre').value.trim();
+            // Sin foto propia y sin foto en la tienda: saldría sin foto. Se avisa antes de crearlo.
+            if (nombreIngresado && !hayFoto() && !fotoDeTienda({ nombre: nombreIngresado }) &&
+                !confirm(`⚠️ "${nombreIngresado}" no tiene foto y no está en la tienda con foto.\n\nVa a salir SIN foto en la tienda hasta que alguien suba una.\n\n¿Crear igual?`)) return;
             const btn = ev.currentTarget; btn.disabled = true;
             const ok = await nuevoModelo(h.querySelector('#stk-n-nombre').value, h.querySelector('#stk-n-tipo').value,
                 parsearTalles(h.querySelector('#stk-n-talles').value), h.querySelector('#stk-n-foto').files[0] || null);
             btn.disabled = false;
             if (ok) cerrarHoja();
         });
+    }
+
+    // Qué pasaría con este nombre en la tienda (se actualiza mientras se escribe).
+    function estadoNombre(h) {
+        const el = h.querySelector('#stk-n-estado'); if (!el) return;
+        const nombre = h.querySelector('#stk-n-nombre').value.trim();
+        const conFoto = !!h.querySelector('#stk-n-foto').files[0];
+        if (C.lista === null) { el.innerHTML = '<span class="stk-ayuda">Mirando el catálogo de la tienda…</span>'; return; }
+        if (!nombre) { el.innerHTML = ''; return; }
+        const c = enCatalogo(nombre);
+        if (c) {
+            el.className = 'stk-estado-nombre stk-est-ok';
+            el.innerHTML = `${c.foto ? `<img alt="" src="${esc(c.foto)}">` : ''}<span>✅ <strong>Está en la tienda</strong>: se junta con ese producto${c.foto ? ' y usa su foto' : ''}.</span>`;
+            return;
+        }
+        const sug = parecidos(nombre, 3);
+        el.className = 'stk-estado-nombre ' + (sug.length ? 'stk-est-aviso' : 'stk-est-info');
+        el.innerHTML = (sug.length
+            ? `<span>⚠️ Ese nombre <strong>no está igual</strong> en la tienda: se crearía un producto aparte. ¿Es alguno de estos?</span><div class="stk-sugerencias">${sug.map(p => `<button type="button" data-nombre="${esc(p.nombre)}">${esc(p.nombre)}</button>`).join('')}</div>`
+            : `<span>ℹ️ Modelo nuevo para la tienda.${conFoto ? '' : ' <strong>Sin foto saldrá sin foto</strong>: conviene subirla.'}</span>`);
+        el.querySelectorAll('[data-nombre]').forEach(b => b.addEventListener('click', () => {
+            h.querySelector('#stk-n-nombre').value = b.dataset.nombre; estadoNombre(h);
+        }));
     }
 
     function abrirEliminados() {
@@ -240,8 +330,11 @@
 
     async function verFoto(id) {
         const m = S.modelos[id]; if (!m) return;
-        if (!m.fotoMini && !m.fotoVersion) { const f = await elegirFoto(); if (f) ponerFoto(id, f); return; }
-        const h = abrirHoja(`<h3 class="stk-h3">${esc(m.nombre)}</h3><div class="stk-foto-grande"><img alt="" src="${esc(m.fotoMini || '')}"></div>
+        const deTienda = tieneFotoPropia(m) ? null : fotoDeTienda(m);
+        if (!m.fotoMini && !m.fotoVersion && !deTienda) { const f = await elegirFoto(); if (f) ponerFoto(id, f); return; }
+        const h = abrirHoja(`<h3 class="stk-h3">${esc(m.nombre)}</h3>
+            ${deTienda ? '<p class="stk-ayuda">Esta es la foto que ya tiene la tienda para este modelo. Si subís una propia, se usa esa.</p>' : ''}
+            <div class="stk-foto-grande"><img alt="" src="${esc(m.fotoMini || (deTienda ? deTienda.fotoGrande : ''))}"></div>
             <div class="stk-botones"><button type="button" class="btn btn-outline" data-acc="cambiar">📷 Cambiar foto</button><button type="button" class="btn btn-outline" data-acc="cerrar">Cerrar</button></div>`);
         h.querySelector('[data-acc="cerrar"]').addEventListener('click', cerrarHoja);
         h.querySelector('[data-acc="cambiar"]').addEventListener('click', async () => { const f = await elegirFoto(); if (f) { cerrarHoja(); ponerFoto(id, f); } });
@@ -276,17 +369,23 @@
     function htmlTarjeta([id, m]) {
         const talles = Object.entries(m.talles || {}).sort((a, b) => ordenTalle(a[0], b[0]));
         const total = totalDe(m);
+        const propia = tieneFotoPropia(m);
+        const deTienda = propia ? null : fotoDeTienda(m);
+        // Sin foto propia ni en el catálogo: en la tienda saldría sin foto (solo se avisa cuando ya se leyó el catálogo).
+        const sinFoto = C.lista !== null && !propia && !deTienda;
         return `
         <article class="stk-card ${claseEstado(total)}" data-id="${esc(id)}">
             <div class="stk-card-top">
-                <button type="button" class="stk-foto" data-acc="foto" data-id="${esc(id)}" title="${m.fotoMini ? 'Ver foto' : 'Poner foto'}">
-                    ${m.fotoMini ? `<img alt="" src="${esc(m.fotoMini)}">` : '<span>📷</span>'}
+                <button type="button" class="stk-foto ${sinFoto ? 'stk-foto-falta' : ''}" data-acc="foto" data-id="${esc(id)}" title="${m.fotoMini ? 'Ver foto' : (deTienda ? 'Foto de la tienda (tocá para ver o poner una propia)' : 'Poner foto')}">
+                    ${m.fotoMini ? `<img alt="" src="${esc(m.fotoMini)}">` : (deTienda ? `<img alt="" src="${esc(deTienda.foto)}">` : '<span>📷</span>')}
                 </button>
                 <div class="stk-info">
                     <h3 class="stk-nombre">${esc(m.nombre)}</h3>
                     <span class="stk-total">${total} par${total === 1 ? '' : 'es'}
                         ${total === 0 ? '<span class="stk-badge stk-b-agotado">Agotado</span>' : (total <= 2 ? '<span class="stk-badge stk-b-poco">Poco</span>' : '')}
                         ${m.tipo === 'indumentaria' ? '<span class="stk-badge">Indumentaria</span>' : ''}
+                        ${deTienda ? '<span class="stk-badge stk-b-tienda" title="Todavía no subiste una foto: se muestra la que ya tiene la tienda">📷 foto de la tienda</span>' : ''}
+                        ${sinFoto ? '<span class="stk-badge stk-b-agotado" title="Sin foto propia y no está en la tienda con foto: saldrá sin foto">⚠ sin foto en la tienda</span>' : ''}
                     </span>
                 </div>
                 <button type="button" class="stk-mas" data-acc="menu" data-id="${esc(id)}" aria-label="Más opciones">⋯</button>
@@ -450,7 +549,8 @@
         iniciar();
         conectarEventos();
         render();
+        cargarCatalogo();   // al terminar de leerlo, la pantalla se actualiza sola
     }
 
-    window.StockCasa = { iniciar, abrir, buscarParaPedido, descontarParaPedido, devolver, aviso, _estado: S, _parsearTalles: parsearTalles, _idDeNombre: idDeNombre, _procesarFoto: procesarFoto, _ponerFoto: ponerFoto };
+    window.StockCasa = { iniciar, abrir, buscarParaPedido, descontarParaPedido, devolver, aviso, _estado: S, _parsearTalles: parsearTalles, _idDeNombre: idDeNombre, _procesarFoto: procesarFoto, _ponerFoto: ponerFoto, _cargarCatalogo: cargarCatalogo, _enCatalogo: enCatalogo, _parecidos: parecidos, _claveCat: claveCat };
 })();
