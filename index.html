@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sistema de Pedidos - Zapatillas</title>
-    <link rel="stylesheet" href="style.css?v=20261006c">
+    <link rel="stylesheet" href="style.css?v=20261007d">
 </head>
 <body>
 
@@ -30,6 +30,7 @@
         <div class="nav-listas-tabs" id="nav-listas-tabs"></div>
         <button type="button" id="btn-nueva-lista" class="btn-nueva-lista" title="Crear una lista nueva">+ Nueva lista</button>
         <div class="nav-listas-separador"></div>
+        <button type="button" id="btn-tab-stock" class="nav-lista-tab">📦 Stock de casa</button>
         <button type="button" id="btn-tab-estadisticas" class="nav-lista-tab">📊 Estadísticas</button>
     </nav>
 
@@ -249,6 +250,13 @@
     <!-- VISTA ESTADÍSTICAS: mismo nivel que las listas, no escondida en
          Configuración. Solo la lista principal (Zapatillas) registra datos
          acá — las demás listas que se creen no suman estadísticas. -->
+    <!-- VISTA STOCK DE CASA (compartida con el socio) -->
+    <div id="vista-stock" class="layout layout-estadisticas" style="display:none;">
+        <div class="panel-principal" style="grid-column: 1 / -1;">
+            <div id="stock-cuerpo"><p class="ayuda">Cargando…</p></div>
+        </div>
+    </div>
+
     <div id="vista-estadisticas" class="layout layout-estadisticas" style="display:none;">
         <div class="panel-principal" style="grid-column: 1 / -1;">
 
@@ -333,10 +341,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
 
-    <script src="firebase-config.js?v=20261006c"></script>
-    <script src="pricing.js?v=20261006c"></script>
-    <script src="store.js?v=20261006c"></script>
-    <script src="app.js?v=20261006c"></script>
-    <script src="estadisticas.js?v=20261006c"></script>
+    <script src="firebase-config.js?v=20261007d"></script>
+    <script src="pricing.js?v=20261007d"></script>
+    <script src="store.js?v=20261007d"></script>
+    <script src="app.js?v=20261007d"></script>
+    <script src="estadisticas.js?v=20261007d"></script>
+    <script src="stock.js?v=20261007d"></script>
 </body>
 </html>

@@ -1084,6 +1084,8 @@ function renderizarTabsListas() {
     });
 
     btnEstadisticas.classList.toggle('activo', vistaActiva === 'estadisticas');
+    const btnStock = document.getElementById('btn-tab-stock');
+    if (btnStock) btnStock.classList.toggle('activo', vistaActiva === 'stock');
 
     // Solo la lista principal (Zapatillas) archiva estadísticas — en las
     // demás listas el botón ni se muestra.
@@ -1121,16 +1123,28 @@ function mostrarVistaListas() {
     vistaActiva = 'listas';
     document.getElementById('vista-listas').style.display = '';
     document.getElementById('vista-estadisticas').style.display = 'none';
+    document.getElementById('vista-stock').style.display = 'none';
     renderizarTabsListas();
 }
 
 function mostrarVistaEstadisticas() {
     vistaActiva = 'estadisticas';
     document.getElementById('vista-listas').style.display = 'none';
+    document.getElementById('vista-stock').style.display = 'none';
     document.getElementById('vista-estadisticas').style.display = '';
     renderizarTabsListas();
     cargarEstadisticasPro();
 }
+
+function mostrarVistaStock() {
+    vistaActiva = 'stock';
+    document.getElementById('vista-listas').style.display = 'none';
+    document.getElementById('vista-estadisticas').style.display = 'none';
+    document.getElementById('vista-stock').style.display = '';
+    renderizarTabsListas();
+    if (typeof StockCasa !== 'undefined') StockCasa.abrir();
+}
+document.getElementById('btn-tab-stock').addEventListener('click', mostrarVistaStock);
 
 document.getElementById('btn-tab-estadisticas').addEventListener('click', mostrarVistaEstadisticas);
 
@@ -1612,7 +1626,7 @@ window.tocarDeposito = function (id, boton) {
     const p = pedidos.find(x => x.id === id); if (!p) return;
     const actual = p.deposito || '';
     cerrarMenuDeposito();
-    if (actual === '') { vibrar(); Store.updatePedido(id, { deposito: 'ok' }); return; }
+    if (actual === '') { vibrar(); cambiarDeposito(p, 'ok'); return; }
 
     const hoja = esPantallaChica();
     const menu = document.createElement('div');
@@ -1643,9 +1657,32 @@ window.tocarDeposito = function (id, boton) {
         cerrarMenuDeposito();
         vibrar();
         // El pedido pudo haberse borrado mientras el menú estaba abierto.
-        if (pedidos.some(x => x.id === id)) Store.updatePedido(id, { deposito: nuevo });
+        if (pedidos.some(x => x.id === id)) cambiarDeposito(pedidos.find(x => x.id === id), nuevo);
     }));
 };
+
+// Cambia el estado de depósito de un par y, si es de casa, maneja el stock:
+//  • pasa a 🟢 verde  -> descuenta 1 del stock de casa (si es de casa) y lo anota
+//    en el pedido (stockDescontado) para no descontar dos veces;
+//  • sale de verde    -> devuelve ese 1 al stock.
+// La casilla cambia al instante; el stock se ajusta enseguida después.
+async function cambiarDeposito(p, nuevo) {
+    const id = p.id;
+    Store.updatePedido(id, { deposito: nuevo });
+    if (typeof StockCasa === 'undefined') return;
+    try {
+        if (nuevo === 'ok' && !p.stockDescontado) {
+            const r = await StockCasa.descontarParaPedido(p);
+            if (r && r.ok) Store.updatePedido(id, { stockDescontado: r.descontado });
+            else if (r && r.casaNo) Store.updatePedido(id, { casaNo: true });
+        } else if (nuevo !== 'ok' && p.stockDescontado) {
+            const devuelto = await StockCasa.devolver(p.stockDescontado);
+            if (devuelto) Store.updatePedido(id, { stockDescontado: null });
+        }
+    } catch (e) {
+        console.error('Stock de casa:', e);
+    }
+}
 document.addEventListener('click', e => { if (!e.target.closest('#menu-deposito') && !e.target.closest('.dep-check')) cerrarMenuDeposito(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') cerrarMenuDeposito(); });
 window.addEventListener('scroll', cerrarMenuDeposito, true);
@@ -2332,6 +2369,8 @@ document.addEventListener('DOMContentLoaded', () => {
             recalcularPedidosActivos();
             programarSyncEnvios();
         });
+
+        if (typeof StockCasa !== 'undefined' && typeof Store.onStockCasa === 'function') StockCasa.iniciar();
 
         // Va después de lo esencial y protegido: si el navegador todavía
         // tuviera un store.js viejo en caché, la app sigue funcionando igual.

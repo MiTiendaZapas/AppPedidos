@@ -63,7 +63,7 @@ const Store = (function () {
     }
 
     // ---- helpers localStorage ------------------------------------------------
-    const LS_KEYS = { pedidos: 'ap_pedidos', clientes: 'ap_clientes', config: 'ap_config', respaldo: 'ap_respaldo_borrado', cierres: 'ap_cierres', listas: 'ap_listas', estadisticasCargadas: 'ap_estadisticas_cargadas', enviosClientes: 'ap_envios_clientes' };
+    const LS_KEYS = { pedidos: 'ap_pedidos', clientes: 'ap_clientes', config: 'ap_config', respaldo: 'ap_respaldo_borrado', cierres: 'ap_cierres', listas: 'ap_listas', estadisticasCargadas: 'ap_estadisticas_cargadas', enviosClientes: 'ap_envios_clientes', stockCasa: 'ap_stock_casa', stockHistorial: 'ap_stock_historial', stockFotos: 'ap_stock_fotos' };
 
     function lsGet(key, porDefecto) {
         try {
@@ -82,6 +82,7 @@ const Store = (function () {
     let listasListenersLocal = [];
     let estadisticasCargadasListenersLocal = [];
     let enviosClientesListenersLocal = [];
+    let stockCasaListenersLocal = [];
 
     function emitPedidosLocal() {
         const arr = lsGet(LS_KEYS.pedidos, []);
@@ -105,6 +106,10 @@ const Store = (function () {
         const obj = lsGet(LS_KEYS.listas, {});
         listasListenersLocal.forEach(cb => cb(obj));
     }
+    function emitStockCasaLocal() {
+        const obj = lsGet(LS_KEYS.stockCasa, {});
+        stockCasaListenersLocal.forEach(cb => cb(obj));
+    }
     function emitEnviosClientesLocal() {
         const obj = lsGet(LS_KEYS.enviosClientes, {});
         enviosClientesListenersLocal.forEach(cb => cb(obj));
@@ -123,6 +128,7 @@ const Store = (function () {
         if (e.key === LS_KEYS.listas) emitListasLocal();
         if (e.key === LS_KEYS.estadisticasCargadas) emitEstadisticasCargadasLocal();
         if (e.key === LS_KEYS.enviosClientes) emitEnviosClientesLocal();
+        if (e.key === LS_KEYS.stockCasa) emitStockCasaLocal();
     });
 
     function idLocalNuevo() {
@@ -436,6 +442,137 @@ const Store = (function () {
         }
     }
 
+    // ---- API STOCK DE CASA --------------------------------------------------
+    // Una colección "stock_casa" con un documento por modelo:
+    //   { nombre, tipo: 'zapatillas'|'indumentaria', talles: { "38": 2, "39/40": 1 },
+    //     fotoRuta, fotoMini (miniatura), fotoVersion, eliminado, ... }
+    // Los cambios de cantidad se hacen en una TRANSACCIÓN (si dos personas tocan
+    // el mismo talle a la vez, no se pisan) y cada uno deja una línea en
+    // "stock_casa_historial". La foto grande va aparte ("stock_casa_fotos") para
+    // no cargar fotos pesadas cada vez que se abre la lista.
+    function onStockCasa(callback) {
+        if (modo === 'firebase') {
+            return db.collection('stock_casa').onSnapshot(
+                snap => {
+                    const obj = {};
+                    snap.forEach(d => { obj[d.id] = d.data(); });
+                    callback(obj);
+                },
+                err => console.error('Error escuchando el stock de casa:', err)
+            );
+        } else {
+            stockCasaListenersLocal.push(callback);
+            emitStockCasaLocal();
+            return () => { stockCasaListenersLocal = stockCasaListenersLocal.filter(f => f !== callback); };
+        }
+    }
+
+    // Crea o actualiza campos de un modelo (no toca los talles).
+    function guardarModeloStock(id, datos) {
+        const doc = { ...datos, actualizadoEn: Date.now() };
+        if (modo === 'firebase') {
+            return db.collection('stock_casa').doc(id).set(doc, { merge: true });
+        } else {
+            const obj = lsGet(LS_KEYS.stockCasa, {});
+            obj[id] = { ...(obj[id] || {}), ...doc };
+            lsSet(LS_KEYS.stockCasa, obj);
+            emitStockCasaLocal();
+            return Promise.resolve();
+        }
+    }
+
+    function registroHistorial(id, nombre, talle, antes, despues, motivo, quien) {
+        return { modeloId: id, nombre, talle: talle || '', antes, despues, delta: despues - antes, motivo: motivo || 'manual', quien: quien || '', ts: Date.now() };
+    }
+
+    // Cambia el stock de un talle. { delta } suma/resta; { valor } lo fija.
+    // Si resta y no alcanza, NO cambia nada y devuelve { ok: false }.
+    function cambiarStockTalle(id, talle, cambio, motivo, quien) {
+        talle = String(talle).trim();
+        if (modo === 'firebase') {
+            const ref = db.collection('stock_casa').doc(id);
+            const FP = firebase.firestore.FieldPath;
+            return db.runTransaction(async tx => {
+                const snap = await tx.get(ref);
+                if (!snap.exists) return { ok: false, motivo: 'no-existe' };
+                const d = snap.data();
+                const antes = Number((d.talles || {})[talle]) || 0;
+                const despues = ('valor' in cambio) ? Math.max(0, Math.floor(cambio.valor)) : antes + cambio.delta;
+                if (despues < 0) return { ok: false, motivo: 'sin-stock', antes };
+                tx.update(ref, new FP('talles', talle), despues, 'actualizadoEn', Date.now());
+                tx.set(db.collection('stock_casa_historial').doc(), registroHistorial(id, d.nombre, talle, antes, despues, motivo, quien));
+                return { ok: true, antes, despues };
+            });
+        } else {
+            const obj = lsGet(LS_KEYS.stockCasa, {});
+            const d = obj[id];
+            if (!d) return Promise.resolve({ ok: false, motivo: 'no-existe' });
+            d.talles = d.talles || {};
+            const antes = Number(d.talles[talle]) || 0;
+            const despues = ('valor' in cambio) ? Math.max(0, Math.floor(cambio.valor)) : antes + cambio.delta;
+            if (despues < 0) return Promise.resolve({ ok: false, motivo: 'sin-stock', antes });
+            d.talles[talle] = despues; d.actualizadoEn = Date.now();
+            lsSet(LS_KEYS.stockCasa, obj);
+            const h = lsGet(LS_KEYS.stockHistorial, []);
+            h.push(registroHistorial(id, d.nombre, talle, antes, despues, motivo, quien));
+            lsSet(LS_KEYS.stockHistorial, h.slice(-300));
+            emitStockCasaLocal();
+            return Promise.resolve({ ok: true, antes, despues });
+        }
+    }
+
+    // Quita un talle del modelo (con su stock).
+    function quitarTalleStock(id, talle, quien) {
+        talle = String(talle).trim();
+        if (modo === 'firebase') {
+            const ref = db.collection('stock_casa').doc(id);
+            const FP = firebase.firestore.FieldPath;
+            return db.runTransaction(async tx => {
+                const snap = await tx.get(ref);
+                if (!snap.exists) return { ok: false };
+                const d = snap.data();
+                const antes = Number((d.talles || {})[talle]) || 0;
+                tx.update(ref, new FP('talles', talle), firebase.firestore.FieldValue.delete(), 'actualizadoEn', Date.now());
+                tx.set(db.collection('stock_casa_historial').doc(), registroHistorial(id, d.nombre, talle, antes, 0, 'talle-quitado', quien));
+                return { ok: true };
+            });
+        } else {
+            const obj = lsGet(LS_KEYS.stockCasa, {});
+            if (obj[id] && obj[id].talles) delete obj[id].talles[talle];
+            lsSet(LS_KEYS.stockCasa, obj);
+            emitStockCasaLocal();
+            return Promise.resolve({ ok: true });
+        }
+    }
+
+    function registrarMovimientoStock(id, nombre, motivo, quien) {
+        const reg = registroHistorial(id, nombre, '', 0, 0, motivo, quien);
+        if (modo === 'firebase') return db.collection('stock_casa_historial').add(reg);
+        const h = lsGet(LS_KEYS.stockHistorial, []);
+        h.push(reg); lsSet(LS_KEYS.stockHistorial, h.slice(-300));
+        return Promise.resolve();
+    }
+
+    function obtenerHistorialStock(cuantos) {
+        if (modo === 'firebase') {
+            return db.collection('stock_casa_historial').orderBy('ts', 'desc').limit(cuantos || 100).get()
+                .then(snap => snap.docs.map(d => d.data()));
+        }
+        return Promise.resolve(lsGet(LS_KEYS.stockHistorial, []).slice().reverse().slice(0, cuantos || 100));
+    }
+
+    function guardarFotoStock(id, dataUrl, version) {
+        if (modo === 'firebase') return db.collection('stock_casa_fotos').doc(id).set({ dataUrl, version });
+        const f = lsGet(LS_KEYS.stockFotos, {}); f[id] = { dataUrl, version }; lsSet(LS_KEYS.stockFotos, f);
+        return Promise.resolve();
+    }
+
+    function obtenerFotoStock(id) {
+        if (modo === 'firebase') return db.collection('stock_casa_fotos').doc(id).get().then(d => (d.exists ? d.data().dataUrl : null));
+        const f = lsGet(LS_KEYS.stockFotos, {});
+        return Promise.resolve(f[id] ? f[id].dataUrl : null);
+    }
+
     // ---- API CONFIG (reglas de precio) ------------------------------------
     function onConfig(callback) {
         if (modo === 'firebase') {
@@ -497,6 +634,7 @@ const Store = (function () {
         onRespaldoBorrado, guardarRespaldoBorrado, borrarRespaldoBorrado,
         onClientes, setCliente, eliminarCliente, normalizarIdCliente,
         onEnviosClientes, setEnvioCliente,
+        onStockCasa, guardarModeloStock, cambiarStockTalle, quitarTalleStock, registrarMovimientoStock, obtenerHistorialStock, guardarFotoStock, obtenerFotoStock,
         onConfig, setConfig,
         registrarCierre, obtenerCierresDelMes,
         onListas, asegurarListaPrincipal, crearLista, eliminarLista,
