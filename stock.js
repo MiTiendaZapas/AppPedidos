@@ -76,9 +76,17 @@
         ctx.drawImage(img, 0, 0, c.width, c.height);
         return c.toDataURL('image/jpeg', calidad);
     }
+    // Firebase no admite documentos de más de 1 MB: si una foto (por ejemplo muy
+    // "ruidosa") queda pesada, se la vuelve a achicar hasta que entre cómoda.
+    const LIMITE_FOTO = 700000;
     async function procesarFoto(file) {
         const img = await cargarImagen(file);
-        return { grande: achicar(img, 1200, 0.85), mini: achicar(img, 260, 0.72) };
+        let grande = '';
+        for (const [lado, calidad] of [[1200, 0.85], [1000, 0.78], [800, 0.7], [600, 0.65]]) {
+            grande = achicar(img, lado, calidad);
+            if (grande.length < LIMITE_FOTO) break;
+        }
+        return { grande, mini: achicar(img, 260, 0.72) };
     }
 
     function elegirFoto() {
@@ -444,5 +452,5 @@
         render();
     }
 
-    window.StockCasa = { iniciar, abrir, buscarParaPedido, descontarParaPedido, devolver, aviso, _estado: S, _parsearTalles: parsearTalles, _idDeNombre: idDeNombre };
+    window.StockCasa = { iniciar, abrir, buscarParaPedido, descontarParaPedido, devolver, aviso, _estado: S, _parsearTalles: parsearTalles, _idDeNombre: idDeNombre, _procesarFoto: procesarFoto, _ponerFoto: ponerFoto };
 })();

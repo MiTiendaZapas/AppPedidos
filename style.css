@@ -535,22 +535,27 @@ tbody tr.fila-dep-faltante td:not(.columna-deposito):not(.columna-accion) { text
 
 .btn-modo-activo { background: var(--primary); color: #fff; border-color: var(--primary); }
 
-body.modo-deposito .panel-form { display: none; }
-body.modo-deposito #tabla-pedidos { display: table; width: 100%; }
-body.modo-deposito #tabla-pedidos thead { display: none; }
-body.modo-deposito #tabla-pedidos th:nth-child(n+5),
-body.modo-deposito #tabla-pedidos td:nth-child(n+5) { display: none; }
-body.modo-deposito #tabla-pedidos tbody td { white-space: normal; font-size: 15px; padding: 10px 8px; text-align: left; overflow-wrap: break-word; }
-body.modo-deposito #tabla-pedidos tbody td:nth-child(2) { min-width: 108px; }
-body.modo-deposito #tabla-pedidos tbody td.columna-deposito { text-align: center; padding: 8px 4px; }
-body.modo-deposito #tabla-pedidos tbody td:nth-child(4) { text-align: center; font-weight: 800; white-space: nowrap; }
-body.modo-deposito .celda-editable { pointer-events: none; user-select: none; -webkit-user-select: none; }
-body.modo-deposito .dep-check { width: 44px; height: 44px; font-size: 22px; border-radius: 10px; }
-body.modo-deposito .columna-deposito { width: 60px; min-width: 60px; }
-/* La barra de arriba deja de ser fija en este modo: ocupaba un 18% de la
-   pantalla del celular, y así el contador queda pegado arriba. */
-body.modo-deposito .topbar { position: static; }
-body.modo-deposito .progreso-deposito { position: sticky; top: 0; z-index: 20; background: var(--surface); box-shadow: 0 2px 6px rgba(15, 23, 42, .12); }
+/* El modo depósito existe SOLO en pantallas de celular (hasta 700 px). */
+#btn-modo-deposito { display: none; }
+@media (max-width: 700px) {
+    #btn-modo-deposito { display: inline-flex; }
+    body.modo-deposito .panel-form { display: none; }
+    body.modo-deposito #tabla-pedidos { display: table; width: 100%; }
+    body.modo-deposito #tabla-pedidos thead { display: none; }
+    body.modo-deposito #tabla-pedidos th:nth-child(n+5),
+    body.modo-deposito #tabla-pedidos td:nth-child(n+5) { display: none; }
+    body.modo-deposito #tabla-pedidos tbody td { white-space: normal; font-size: 15px; padding: 10px 8px; text-align: left; overflow-wrap: break-word; }
+    body.modo-deposito #tabla-pedidos tbody td:nth-child(2) { min-width: 108px; }
+    body.modo-deposito #tabla-pedidos tbody td.columna-deposito { text-align: center; padding: 8px 4px; }
+    body.modo-deposito #tabla-pedidos tbody td:nth-child(4) { text-align: center; font-weight: 800; white-space: nowrap; }
+    body.modo-deposito .celda-editable { pointer-events: none; user-select: none; -webkit-user-select: none; }
+    body.modo-deposito .dep-check { width: 44px; height: 44px; font-size: 22px; border-radius: 10px; }
+    body.modo-deposito .columna-deposito { width: 60px; min-width: 60px; }
+    /* La barra de arriba deja de ser fija en este modo: ocupaba un 18% de la
+       pantalla del celular, y así el contador queda pegado arriba. */
+    body.modo-deposito .topbar { position: static; }
+    body.modo-deposito .progreso-deposito { position: sticky; top: 0; z-index: 20; background: var(--surface); box-shadow: 0 2px 6px rgba(15, 23, 42, .12); }
+}
 
 /* ============================================================================
    STOCK DE CASA (stock.js)

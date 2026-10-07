@@ -1692,11 +1692,13 @@ window.addEventListener('scroll', cerrarMenuDeposito, true);
 // formulario ni columnas de plata, sin la ✕ de borrar (para no borrar un
 // pedido con el dedo) y sin que un toque en un nombre abra el teclado. Se
 // activa solo en pantallas chicas la primera vez; la elección se recuerda en
-// cada dispositivo (no se sincroniza: el celular del depósito y tu compu
-// pueden estar en modos distintos).
+// cada dispositivo (no se sincroniza). En la versión de PC / pantalla grande NO
+// existe: ni el botón ni el modo (aunque el navegador tenga guardado "activo").
 const CLAVE_MODO_DEPOSITO = 'ap_modo_deposito';
 function esPantallaChica() { return window.matchMedia('(max-width: 700px)').matches; }
 function aplicarModoDeposito(activo, recordar) {
+    if (recordar) { try { localStorage.setItem(CLAVE_MODO_DEPOSITO, activo ? '1' : '0'); } catch (e) { /* sin almacenamiento */ } }
+    activo = activo && esPantallaChica();
     document.body.classList.toggle('modo-deposito', activo);
     const btn = document.getElementById('btn-modo-deposito');
     if (btn) {
@@ -1704,14 +1706,20 @@ function aplicarModoDeposito(activo, recordar) {
         btn.textContent = activo ? '📋 Ver todo' : '📦 Modo depósito';
         btn.title = activo ? 'Volver a la vista completa (formulario, precios, etc.)' : 'Vista simple para el celular: solo casilla, cliente, modelo y talle';
     }
-    if (recordar) { try { localStorage.setItem(CLAVE_MODO_DEPOSITO, activo ? '1' : '0'); } catch (e) { /* sin almacenamiento */ } }
 }
 (function iniciarModoDeposito() {
-    let guardado = null;
-    try { guardado = localStorage.getItem(CLAVE_MODO_DEPOSITO); } catch (e) { /* sin almacenamiento */ }
-    aplicarModoDeposito(guardado === null ? esPantallaChica() : guardado === '1', false);
+    const preferencia = () => {
+        let guardado = null;
+        try { guardado = localStorage.getItem(CLAVE_MODO_DEPOSITO); } catch (e) { /* sin almacenamiento */ }
+        return guardado === null ? esPantallaChica() : guardado === '1';
+    };
+    aplicarModoDeposito(preferencia(), false);
     const btn = document.getElementById('btn-modo-deposito');
     if (btn) btn.addEventListener('click', () => aplicarModoDeposito(!document.body.classList.contains('modo-deposito'), true));
+    // Si se achica/agranda la ventana (o se gira el celular) se vuelve a evaluar.
+    const mq = window.matchMedia('(max-width: 700px)');
+    const alCambiar = () => aplicarModoDeposito(preferencia(), false);
+    if (mq.addEventListener) mq.addEventListener('change', alCambiar); else if (mq.addListener) mq.addListener(alCambiar);
 })();
 
 // Contador de avance: sobre los pares confirmados (✅) de la lista que se ve.
