@@ -293,6 +293,12 @@ tbody tr:hover .columna-privada { background: var(--primary-bg); }
 
 .celda-editable { cursor: text; border-radius: 3px; }
 .celda-editable:focus { background: var(--surface); outline: 2px solid var(--primary); outline-offset: -2px; }
+/* 🏠 = es de casa / hay en el stock de casa. Pseudo-elemento: no se guarda como parte del nombre del modelo. */
+.celda-editable.casa-hay::after { content: ' 🏠'; }
+.celda-editable.casa-desc::after { content: ' 🏠✓'; opacity: .7; }
+.celda-editable.casa-falta::after { content: ' 🏠⚠'; }
+.celda-editable.casa-hay, .celda-editable.casa-falta { box-shadow: inset 3px 0 0 var(--warning); }
+.celda-editable.casa-desc { box-shadow: inset 3px 0 0 var(--success); }
 .celda-centro { text-align: center; }
 .celda-ganancia { font-weight: 800; }
 .celda-ganancia.ganancia-positiva { color: var(--success); }

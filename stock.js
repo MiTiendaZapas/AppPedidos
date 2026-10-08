@@ -540,6 +540,8 @@
         Store.onStockCasa(obj => {
             S.modelos = obj || {};
             S.cargado = true;
+            // La lista de pedidos marca con 🏠 los modelos que hay en casa: se redibuja al cambiar el stock.
+            if (typeof renderizarTabla === 'function' && !(document.activeElement && document.activeElement.isContentEditable)) renderizarTabla();
             const v = document.getElementById('vista-stock');
             if (v && v.style.display !== 'none') render();
         });
