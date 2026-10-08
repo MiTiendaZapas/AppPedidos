@@ -721,7 +721,8 @@ window.guardarEdicion = function (id, campo, elemento) {
             elemento.innerText = pedido.pagoMonto ? formatoPesos(pedido.pagoMonto) : '';
             return;
         }
-        Store.updatePedido(id, { pagoMonto: resultado });
+        // Una celda vacía vuelve a "0" (no pagó nada), igual que al crear el pedido.
+        Store.updatePedido(id, { pagoMonto: resultado === '' ? 0 : resultado });
         return;
     }
 
@@ -765,7 +766,7 @@ window.alternarPago = function (id) {
     // en vez de arrastrarlo — si no, podía coincidir con la deuda nueva "de
     // casualidad" y la línea aparecía saldada sin que nadie hubiera pagado.
     if (entraACambio || saleDeCambio) {
-        cambios.pagoMonto = '';
+        cambios.pagoMonto = 0;
     }
 
     Store.updatePedido(id, cambios).then(() => {
@@ -1517,6 +1518,23 @@ function esClienteGrupo(nombreCliente) {
     return !!(c && c.esGrupo);
 }
 
+// Marca 🏠 en la fila si el par es de casa o hay en el stock de casa de la app (aunque todavía no se
+// haya marcado 🟢 para descontarlo). Es solo visual: no cambia ningún dato.
+function infoCasa(p) {
+    if (typeof StockCasa === 'undefined' || !p || p.casaNo || p.pago === 'Cambio') return null;
+    if (p.stockDescontado) return { clase: 'casa-desc', titulo: '🏠 De casa: ya descontado del stock' };
+    const cargado = StockCasa._estado && StockCasa._estado.cargado;
+    const h = cargado ? StockCasa.buscarParaPedido(p) : null;
+    if (p.origen === 'casa') {
+        if (!cargado) return { clase: 'casa-hay', titulo: '🏠 De casa. Se descuenta al marcar 🟢' };
+        return h && h.disponible > 0
+            ? { clase: 'casa-hay', titulo: `🏠 De casa (hay ${h.disponible} en stock). Se descuenta al marcar 🟢` }
+            : { clase: 'casa-falta', titulo: '🏠 De casa, pero en el stock de la app ya no queda de este talle' };
+    }
+    if (h && h.disponible > 0) return { clase: 'casa-hay', titulo: `🏠 Hay ${h.disponible} en tu stock de casa (talle ${h.talle})` };
+    return null;
+}
+
 function renderizarTabla() {
     listaBody.innerHTML = '';
 
@@ -1564,11 +1582,12 @@ function renderizarTabla() {
         // cargue algo en Pago (a diferencia de una venta normal).
         const mostrarCalculo = hayDeuda && (hayPago || pedido.pago === 'Cambio');
         const ganancia = gananciaDeLinea(pedido);
+        const casa = infoCasa(pedido);
 
         fila.innerHTML = `
             <td class="columna-deposito"><button type="button" class="dep-check dep-${pedido.deposito || 'vacio'}" title="${tituloDeposito(pedido.deposito)}" onclick="tocarDeposito('${pedido.id}', this)">${simboloDeposito(pedido.deposito)}</button></td>
             <td contenteditable="true" class="celda-editable" onblur="guardarEdicion('${pedido.id}', 'cliente', this)">${pedido.cliente}</td>
-            <td contenteditable="true" class="celda-editable" onblur="guardarEdicion('${pedido.id}', 'modelo', this)" title="${pedido.categoria || ''}">${pedido.modelo}</td>
+            <td contenteditable="true" class="celda-editable ${casa ? casa.clase : ''}" onblur="guardarEdicion('${pedido.id}', 'modelo', this)" title="${pedido.categoria || ''}${casa ? ' · ' + casa.titulo : ''}">${pedido.modelo}</td>
             <td contenteditable="true" class="celda-editable" onblur="guardarEdicion('${pedido.id}', 'talle', this)">${pedido.talle}</td>
             <td><span class="texto-clickable" onclick="alternarPago('${pedido.id}')">${badgePago(pedido.pago)}</span></td>
             <td class="columna-icono"><span class="texto-clickable" onclick="alternarEstado('${pedido.id}')">${badgeEstado(pedido.estado)}</span></td>

@@ -150,7 +150,10 @@ const Store = (function () {
     }
 
     function addPedido(data) {
-        const conCreatedAt = { ...data, createdAt: Date.now() };
+        // El pago de un pedido nuevo arranca SIEMPRE en 0 (todavía no pagó nada): así el
+        // Saldo se ve desde el primer momento. Solo se respeta si ya viene con un monto.
+        const pagoMonto = (data.pagoMonto === '' || data.pagoMonto === undefined || data.pagoMonto === null) ? 0 : data.pagoMonto;
+        const conCreatedAt = { ...data, pagoMonto, createdAt: Date.now() };
         if (modo === 'firebase') {
             return db.collection('pedidos').add(conCreatedAt).then(ref => ref.id);
         } else {
