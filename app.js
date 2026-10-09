@@ -144,14 +144,22 @@ function deudaDeLinea(p) {
     return (parseFloat(p.importe) || 0) + recargoDeLinea(p);
 }
 
+// El RECARGO de un "Cambio" de talle lo cobra el proveedor: el cliente lo paga (por eso
+// suma a lo que debe, deudaDeLinea) pero NO es plata nuestra: ni venta ni ganancia.
+// ventaDeLinea es lo que realmente se vende de producto en la línea (sin ese recargo).
+function ventaDeLinea(p) {
+    if (esFaltante(p)) return 0;
+    return parseFloat(p.importe) || 0;
+}
+
 // Lo que GANA el negocio con esta línea = lo que se factura del producto
 // menos lo que le cuestan los pares (el costo sale de la categoría del
-// modelo, ver Configuración). Un "Cambio" de talle no tiene producto: su
-// ganancia es el recargo entero. Devuelve null si no se puede calcular (la
+// modelo, ver Configuración). Un "Cambio" de talle no deja
+// ganancia (su recargo se le paga al proveedor). Devuelve null si no se puede calcular (la
 // categoría todavía no tiene costo cargado, o la línea no tiene precio).
 function gananciaDeLinea(p) {
     if (esFaltante(p)) return 0;
-    if (p.pago === 'Cambio') return recargoDeLinea(p);
+    if (p.pago === 'Cambio') return 0;   // el recargo es del proveedor: no deja ganancia
     const importe = parseFloat(p.importe) || 0;
     if (importe <= 0 || !precioConfig) return null;
     const costo = costoUnitarioDeModelo(precioConfig, p.modelo);
@@ -860,7 +868,10 @@ async function registrarEstadisticasDeLista(lista) {
     if (confirmados.length === 0) return false;
 
     const ahora = new Date();
-    const facturacion = confirmados.reduce((s, p) => s + deudaDeLinea(p), 0);
+    // Facturación = lo que se vende de producto. El recargo de los "Cambio" se anota aparte
+    // (recargosCambio): es plata del proveedor, no entra en ventas ni en ganancia.
+    const facturacion = confirmados.reduce((s, p) => s + ventaDeLinea(p), 0);
+    const recargosCambio = confirmados.reduce((s, p) => s + recargoDeLinea(p), 0);
     const paresVendidos = confirmados.filter(p => p.pago !== 'Cambio');
     const cantidadPares = paresVendidos.reduce((s, p) => s + (parseInt(p.cantidad) || 0), 0);
     if (facturacion <= 0 && cantidadPares === 0) return false;
@@ -891,10 +902,11 @@ async function registrarEstadisticasDeLista(lista) {
         modelosVendidos,
         ganancia: g.ganancia,
         lineasSinCosto: g.sinCosto,
-        cobrado: facturacion - pendiente,
+        recargosCambio,
+        cobrado: facturacion + recargosCambio - pendiente,
         pendiente,
         lineas,
-        version: 2,
+        version: 3,
     });
     return true;
 }
@@ -931,7 +943,8 @@ function lineaParaCierre(p) {
 function auditarListaParaCierre(lista) {
     const confirmados = lista.filter(esVentaFirme);
     const ventas = confirmados.filter(p => p.pago !== 'Cambio');
-    const facturacion = confirmados.reduce((s, p) => s + deudaDeLinea(p), 0);
+    const facturacion = confirmados.reduce((s, p) => s + ventaDeLinea(p), 0);
+    const recargos = confirmados.reduce((s, p) => s + recargoDeLinea(p), 0);
     const pares = ventas.reduce((s, p) => s + (parseInt(p.cantidad) || 0), 0);
     const g = resumenGanancia(confirmados);
     const margen = facturacion > 0 ? g.ganancia / facturacion : 0;
@@ -962,7 +975,7 @@ function auditarListaParaCierre(lista) {
     const noConfirmados = lista.filter(p => p.estado !== '✅').length;
     if (noConfirmados > 0) alertas.push({ nivel: 'info', texto: `${noConfirmados} pedido(s) sin confirmar (no entran al cierre).` });
 
-    return { confirmados: confirmados.length, pares, facturacion, ganancia: g.ganancia, margen, alertas };
+    return { confirmados: confirmados.length, pares, facturacion, recargos, ganancia: g.ganancia, margen, alertas };
 }
 
 // Refleja el estado COMPARTIDO (entre las dos computadoras) de si esta
@@ -996,7 +1009,8 @@ document.getElementById('btn-cargar-estadisticas').addEventListener('click', asy
     const mensaje = [
         '📊 Vas a cargar este cierre a Estadísticas:',
         `• ${auditoria.confirmados} pedidos confirmados / ${auditoria.pares} pares`,
-        `• Facturación: ${formatoPesos(auditoria.facturacion)}`,
+        `• Facturación (ventas de pares): ${formatoPesos(auditoria.facturacion)}`,
+        ...(auditoria.recargos > 0 ? [`• Cambios de talle: ${formatoPesos(auditoria.recargos)} (es del proveedor: no suma a ventas ni ganancia)`] : []),
         `• Ganancia: ${formatoPesos(auditoria.ganancia)} (margen ${(auditoria.margen * 100).toFixed(1)}%)`,
         ...(auditoria.alertas.length ? ['', 'Revisá esto:', ...auditoria.alertas.map(a => `${iconos[a.nivel]} ${a.texto}`)] : []),
         '',
@@ -1186,12 +1200,19 @@ function actualizarResumen() {
     const totalPares = confirmados.filter(p => p.pago !== 'Cambio' && !esFaltante(p)).reduce((s, p) => s + (parseInt(p.cantidad) || 0), 0);
     totalSpan.textContent = totalPares;
 
-    let totalFacturado = 0;
-    confirmados.forEach(p => { totalFacturado += deudaDeLinea(p); });
+    // "Total facturado" = ventas de pares. El recargo de los "Cambio" lo cobra el proveedor:
+    // el cliente lo debe (entra en Ya cobrado / Pendiente) pero no es venta ni ganancia.
+    let totalFacturado = 0, totalRecargos = 0;
+    confirmados.forEach(p => { totalFacturado += ventaDeLinea(p); totalRecargos += recargoDeLinea(p); });
 
     const deudaClientes = calcularDeudaClientes();
     const totalPendiente = Object.values(deudaClientes).reduce((s, c) => s + Math.max(c.total - c.pagado, 0), 0);
-    const totalCobrado = totalFacturado - totalPendiente;
+    const totalCobrado = totalFacturado + totalRecargos - totalPendiente;
+    const notaCambios = document.getElementById('nota-cambios');
+    if (notaCambios) {
+        notaCambios.style.display = totalRecargos > 0 ? '' : 'none';
+        notaCambios.textContent = `🔁 Cambios de talle: ${formatoPesos(totalRecargos)} — es plata del proveedor: está incluida en "Ya cobrado" y "Pendiente" (el cliente la debe), pero no suma a lo facturado ni a la ganancia.`;
+    }
 
     totalFacturadoSpan.textContent = formatoPesos(totalFacturado);
     totalCobradoSpan.textContent = formatoPesos(totalCobrado);

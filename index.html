@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sistema de Pedidos - Zapatillas</title>
-    <link rel="stylesheet" href="style.css?v=20261009a">
+    <link rel="stylesheet" href="style.css?v=20261009b">
 </head>
 <body>
 
@@ -222,6 +222,7 @@
                         <span class="kpi-etiqueta" id="etiqueta-ganancia">Ganancia (de lo facturado)</span>
                     </div>
                 </div>
+                <p id="nota-cambios" class="ayuda" style="display:none; margin: 0 0 10px;"></p>
                 <ul id="lista-resumen-clientes" class="lista-limpia"></ul>
             </div>
 
@@ -291,7 +292,7 @@
 
                 <div id="tab-general" class="tab-contenido">
                     <div class="campo campo-chico">
-                        <label for="input-recargo-cambio">Recargo por cambio de talle ($)</label>
+                        <label for="input-recargo-cambio">Recargo por cambio de talle ($) <span class="opcional">(lo cobra el proveedor: el cliente lo paga pero no es ganancia tuya)</span></label>
                         <input type="number" id="input-recargo-cambio" min="0" step="500">
                     </div>
 
@@ -341,11 +342,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
 
-    <script src="firebase-config.js?v=20261009a"></script>
-    <script src="pricing.js?v=20261009a"></script>
-    <script src="store.js?v=20261009a"></script>
-    <script src="app.js?v=20261009a"></script>
-    <script src="estadisticas.js?v=20261009a"></script>
-    <script src="stock.js?v=20261009a"></script>
+    <script src="firebase-config.js?v=20261009b"></script>
+    <script src="pricing.js?v=20261009b"></script>
+    <script src="store.js?v=20261009b"></script>
+    <script src="app.js?v=20261009b"></script>
+    <script src="estadisticas.js?v=20261009b"></script>
+    <script src="stock.js?v=20261009b"></script>
 </body>
 </html>

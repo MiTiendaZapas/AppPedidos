@@ -66,7 +66,8 @@
 
     // ---------- normalización de un cierre ----------------------------------
     function normalizarCierre(c) {
-        const fact = num(c.facturacion), pares = num(c.cantidadPares), pedidos = num(c.cantidadPedidos);
+        let fact = num(c.facturacion);
+        const pares = num(c.cantidadPares), pedidos = num(c.cantidadPedidos);
         const modelos = c.modelosVendidos || {};
         let ganancia, estimada = false, sinCosto = num(c.lineasSinCosto);
         if (typeof c.ganancia === 'number') {
@@ -81,7 +82,18 @@
             });
             ganancia = fact - costo;
         }
+        // El recargo de un "Cambio" de talle es del proveedor: no es venta ni ganancia. Los cierres
+        // guardados antes de este criterio (versión < 3) lo traen sumado en facturación y ganancia:
+        // si tienen el detalle por venta, se lo descuenta exacto. Los que no, se avisan en Control.
+        let ajusteCambios = 0;
+        if (Array.isArray(c.lineas) && !(num(c.version) >= 3)) {
+            const camb = c.lineas.filter(l => l.cambio);
+            ajusteCambios = camb.reduce((s, l) => s + num(l.recargo), 0);
+            fact -= ajusteCambios;
+            ganancia -= camb.reduce((s, l) => s + (l.ganancia == null ? 0 : num(l.ganancia)), 0);
+        }
         return {
+            ajusteCambios,
             id: c.id, fecha: c.fecha || '', fact, pares, pedidos, ganancia, estimada, sinCosto,
             lineas: Array.isArray(c.lineas) ? c.lineas : null,
             modelos, corregido: !!c.corregido, nota: c.correccionNota || '',
@@ -104,6 +116,11 @@
             }
         }
         if (c.estimada) a.push({ nivel: 'info', texto: 'Cierre anterior al detalle por venta: su ganancia es una ESTIMACIÓN con los costos actuales.' });
+        if (c.ajusteCambios > 0) a.push({ nivel: 'info', texto: `Se descontaron ${pesos(c.ajusteCambios)} de recargos de cambios de talle (son del proveedor, no ventas ni ganancia).` });
+        if (!c.lineas && c.pedidos > c.pares) {
+            const rec = (typeof precioConfig !== 'undefined' && precioConfig ? num(precioConfig.recargoCambio) : 0) * (c.pedidos - c.pares);
+            a.push({ nivel: 'aviso', texto: `Puede traer sumados ~${pesos(rec)} de ${c.pedidos - c.pares} cambio(s) de talle (son del proveedor, no ventas ni ganancia). Este cierre no tiene detalle por venta, así que no se pudo descontar solo.` });
+        }
         if (c.sinCosto > 0) a.push({ nivel: 'aviso', texto: `${c.sinCosto} par(es) sin costo cargado: la ganancia está incompleta.` });
         if (c.corregido) a.push({ nivel: 'info', texto: c.nota || 'Este cierre fue corregido manualmente (hay una copia del original guardada).' });
         if (c.lineas) {
@@ -169,6 +186,7 @@
 
             if (c.lineas) {
                 c.lineas.forEach(l => {
+                    if (l.cambio) return;   // el recargo de un cambio es del proveedor: no entra en rentabilidad
                     const cat = l.categoria || 'Sin categoría';
                     const cant = l.cambio ? 0 : (num(l.cantidad) || 1);
                     const imp = num(l.importe) + num(l.recargo);
@@ -486,8 +504,8 @@
         </section>
         <section class="est-card"><h3 class="est-h3">Cómo se calcula cada número</h3>
             <ul class="est-def">
-                <li><strong>Facturación:</strong> suma del precio de cada pedido confirmado (✅) más el recargo de los "Cambio" de talle. Es bruta: no distingue cobrado de pendiente.</li>
-                <li><strong>Ganancia:</strong> precio de venta menos el costo del par (según su categoría en Configuración). En un "Cambio", la ganancia es el recargo completo.</li>
+                <li><strong>Facturación:</strong> suma del precio de cada par confirmado (✅). Es bruta: no distingue cobrado de pendiente. <strong>No incluye</strong> el recargo de los "Cambio" de talle: ese dinero es del proveedor.</li>
+                <li><strong>Ganancia:</strong> precio de venta menos el costo del par (según su categoría en Configuración). Un "Cambio" de talle no suma ganancia.</li>
                 <li><strong>Congelado:</strong> al apretar "📊 Cargar a Estadísticas" se guarda cada venta con su precio y su costo de ESE momento. Cambiar precios o costos después no altera cierres anteriores.</li>
                 <li><strong>Estimado:</strong> los cierres anteriores al detalle por venta no tienen costos guardados; su ganancia se estima con los costos actuales.</li>
                 <li><strong>Alertas:</strong> margen fuera de ${pct(MARGEN_MIN_NORMAL, 0)}–${pct(MARGEN_MAX_NORMAL, 0)}, facturación por par fuera de ${pesos(PRECIO_PAR_MIN)}–${pesos(PRECIO_PAR_MAX)}, ventas sin precio, con precio menor a $1.000 o por debajo del costo, y cierres duplicados.</li>
