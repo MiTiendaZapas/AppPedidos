@@ -499,8 +499,12 @@ body[data-theme="dark"] .badge-warning { color: var(--warning); }
 .dep-check.dep-cambiar { background: var(--warning); border-color: var(--warning); }
 .dep-check.dep-faltante { background: var(--danger); border-color: var(--danger); }
 
-/* La fila se ve según el estado (la casilla siempre queda a todo color). */
-tbody tr.fila-dep-ok td:not(.columna-deposito) { background: var(--neutral-bg); opacity: .5; }
+/* La fila se ve según el estado (la casilla siempre queda a todo color).
+   La fila "agarrada" (tick verde) se pone gris SOLO en el celular, donde sirve para ir
+   tachando lo que ya se juntó; en la compu queda como cualquier otra (se ve el tick). */
+@media (max-width: 700px) {
+    tbody tr.fila-dep-ok td:not(.columna-deposito) { background: var(--neutral-bg); opacity: .5; }
+}
 tbody tr.fila-dep-cambiar td:not(.columna-deposito) { background: var(--warning-bg); }
 tbody tr.fila-dep-faltante td:not(.columna-deposito) { background: var(--danger-bg); }
 tbody tr.fila-dep-faltante td:not(.columna-deposito):not(.columna-accion) { text-decoration: line-through; text-decoration-color: var(--danger); }
