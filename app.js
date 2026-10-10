@@ -704,6 +704,21 @@ window.guardarEdicion = function (id, campo, elemento) {
     if (!pedido) return;
     let nuevoValor = elemento.innerText.trim();
 
+    if (campo === 'importe') {
+        // Una sola columna de precio. Cada fila es un par (cantidad 1), así que el precio de la
+        // línea y el unitario son lo mismo; si alguna fila vieja tuviera cantidad mayor, el valor
+        // escrito es el total de la línea y se reparte.
+        const limpio = nuevoValor.replace(/[\$¢\s]/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.');
+        const escrito = limpio ? (parseFloat(limpio) || 0) : 0;
+        const n = normalizarPrecioIngresado(escrito);
+        if (n !== escrito) alert(`ℹ️ Escribiste ${escrito}: lo interpreté como ${formatoPesos(n)} (los precios van en pesos completos, no en miles).`);
+        // Solo con tocar la celda y salir (sin cambiar nada) no se convierte en precio manual.
+        if (n === (parseFloat(pedido.importe) || 0)) { elemento.innerText = n ? formatoPesos(n) : ''; return; }
+        const cant = parseInt(pedido.cantidad) || 1;
+        Store.updatePedido(id, { precioUnitario: n / cant, importe: n, manualPrecio: true, categoria: 'Manual' });
+        return;
+    }
+
     if (campo === 'precioUnitario') {
         const limpio = nuevoValor.replace(/[\$¢\s]/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.');
         const escrito = limpio ? (parseFloat(limpio) || 0) : 0;
@@ -1578,7 +1593,7 @@ function renderizarTabla() {
     }
 
     if (filtro && copia.length === 0) {
-        listaBody.innerHTML = `<tr><td colspan="13" class="vacio-fila">No se encontraron pedidos para "${filtroTexto}".</td></tr>`;
+        listaBody.innerHTML = `<tr><td colspan="12" class="vacio-fila">No se encontraron pedidos para "${filtroTexto}".</td></tr>`;
     }
 
     copia.forEach((pedido, indice) => {
@@ -1586,7 +1601,7 @@ function renderizarTabla() {
         if (indice === 0 || esGrupoActual !== esClienteGrupo(copia[indice - 1].cliente)) {
             const filaSeparador = document.createElement('tr');
             filaSeparador.className = 'fila-separador-grupo-tr';
-            filaSeparador.innerHTML = `<td colspan="13" class="fila-separador-grupo">${esGrupoActual ? '👥 Grupo / revendedores (mayorista)' : '🛍️ Clientes comunes (minorista)'}</td>`;
+            filaSeparador.innerHTML = `<td colspan="12" class="fila-separador-grupo">${esGrupoActual ? '👥 Grupo / revendedores (mayorista)' : '🛍️ Clientes comunes (minorista)'}</td>`;
             listaBody.appendChild(filaSeparador);
         }
 
@@ -1614,10 +1629,9 @@ function renderizarTabla() {
             <td class="columna-icono"><span class="texto-clickable" onclick="alternarEstado('${pedido.id}')">${badgeEstado(pedido.estado)}</span></td>
             <td class="columna-icono"><span class="texto-clickable" onclick="alternarEnvio('${pedido.id}')">${badgeEnvio(pedido.envio)}</span></td>
             <td class="columna-privada">
-                <span contenteditable="true" class="celda-editable" onblur="guardarEdicion('${pedido.id}', 'precioUnitario', this)">${pedido.precioUnitario ? formatoPesos(pedido.precioUnitario) : ''}</span>
+                <span contenteditable="true" class="celda-editable" title="Precio de este par (tocá para cambiarlo a mano)" onblur="guardarEdicion('${pedido.id}', 'importe', this)">${pedido.importe ? formatoPesos(pedido.importe) : ''}</span>
                 ${pedido.manualPrecio ? `<button class="btn-mini" title="Volver a precio automático" onclick="resetearPrecioManual('${pedido.id}')">🔄</button>` : ''}
             </td>
-            <td class="columna-privada">${pedido.importe ? formatoPesos(pedido.importe) : ''}</td>
             <td contenteditable="true" class="celda-editable columna-privada" onblur="guardarEdicion('${pedido.id}', 'pagoMonto', this)">${pagado > 0 ? formatoPesos(pagado) : (hayPago ? '$0' : '')}</td>
             <td class="celda-saldo columna-privada ${mostrarCalculo ? (saldo > 0 ? 'saldo-pendiente' : 'saldo-saldado') : ''}">${mostrarCalculo ? (saldo > 0 ? formatoPesos(saldo) : '✅ Saldado') : '—'}</td>
             <td class="celda-ganancia columna-privada ${ganancia === null ? '' : (ganancia < 0 ? 'ganancia-negativa' : 'ganancia-positiva')}" ${ganancia === null && (parseFloat(pedido.importe) || 0) > 0 ? 'title="Falta cargar el costo de esta categoría (Configuración)"' : ''}>${ganancia === null ? '—' : formatoPesos(ganancia)}</td>
