@@ -548,6 +548,105 @@ const Store = (function () {
         }
     }
 
+    // Descuento de stock ligado a un PEDIDO. Es una sola transacción que (1) baja 1 del talle y
+    // (2) deja la marca `stockDescontado` en el pedido: si dos pantallas lo intentan a la vez,
+    // una sola lo logra, y nunca se descuenta dos veces el mismo pedido.
+    // `coleccionPedidos` solo existe para poder probar sin tocar los pedidos reales.
+    function descontarStockDePedido(pedidoId, modeloId, talle, quien, coleccionPedidos) {
+        talle = String(talle).trim();
+        const col = coleccionPedidos || 'pedidos';
+        if (modo === 'firebase') {
+            const pRef = db.collection(col).doc(pedidoId);
+            const sRef = db.collection('stock_casa').doc(modeloId);
+            const FP = firebase.firestore.FieldPath;
+            return db.runTransaction(async tx => {
+                const ps = await tx.get(pRef);
+                if (!ps.exists) return { ok: false, motivo: 'no-pedido' };
+                const pd = ps.data();
+                if (pd.stockDescontado) return { ok: false, motivo: 'ya-descontado' };
+                if (pd.casaNo) return { ok: false, motivo: 'casa-no' };
+                const ss = await tx.get(sRef);
+                if (!ss.exists || ss.data().eliminado) return { ok: false, motivo: 'no-existe' };
+                const d = ss.data();
+                const antes = Number((d.talles || {})[talle]) || 0;
+                if (antes <= 0) return { ok: false, motivo: 'sin-stock', antes };
+                tx.update(sRef, new FP('talles', talle), antes - 1, 'actualizadoEn', Date.now());
+                tx.update(pRef, { stockDescontado: { id: modeloId, talle } });
+                tx.set(db.collection('stock_casa_historial').doc(), registroHistorial(modeloId, d.nombre, talle, antes, antes - 1, 'pedido', quien));
+                return { ok: true, antes, despues: antes - 1, nombre: d.nombre };
+            });
+        } else {
+            const peds = lsGet(LS_KEYS.pedidos, []);
+            const p = peds.find(x => x.id === pedidoId);
+            const obj = lsGet(LS_KEYS.stockCasa, {});
+            const d = obj[modeloId];
+            if (!p) return Promise.resolve({ ok: false, motivo: 'no-pedido' });
+            if (p.stockDescontado) return Promise.resolve({ ok: false, motivo: 'ya-descontado' });
+            if (p.casaNo) return Promise.resolve({ ok: false, motivo: 'casa-no' });
+            if (!d || d.eliminado) return Promise.resolve({ ok: false, motivo: 'no-existe' });
+            const antes = Number((d.talles || {})[talle]) || 0;
+            if (antes <= 0) return Promise.resolve({ ok: false, motivo: 'sin-stock', antes });
+            d.talles[talle] = antes - 1; d.actualizadoEn = Date.now();
+            p.stockDescontado = { id: modeloId, talle };
+            lsSet(LS_KEYS.stockCasa, obj); lsSet(LS_KEYS.pedidos, peds);
+            const h = lsGet(LS_KEYS.stockHistorial, []);
+            h.push(registroHistorial(modeloId, d.nombre, talle, antes, antes - 1, 'pedido', quien));
+            lsSet(LS_KEYS.stockHistorial, h.slice(-300));
+            emitStockCasaLocal(); emitPedidosLocal();
+            return Promise.resolve({ ok: true, antes, despues: antes - 1, nombre: d.nombre });
+        }
+    }
+
+    // Deshace lo anterior: devuelve 1 al stock y limpia la marca del pedido (misma transacción).
+    function devolverStockDePedido(pedidoId, quien, coleccionPedidos) {
+        const col = coleccionPedidos || 'pedidos';
+        if (modo === 'firebase') {
+            const pRef = db.collection(col).doc(pedidoId);
+            const FP = firebase.firestore.FieldPath;
+            return db.runTransaction(async tx => {
+                const ps = await tx.get(pRef);
+                if (!ps.exists) return { ok: false, motivo: 'no-pedido' };
+                const sd = ps.data().stockDescontado;
+                if (!sd || !sd.id) return { ok: false, motivo: 'sin-descuento' };
+                const sRef = db.collection('stock_casa').doc(sd.id);
+                const ss = await tx.get(sRef);
+                let despues = null, nombre = '';
+                if (ss.exists) {
+                    const d = ss.data(); nombre = d.nombre;
+                    const antes = Number((d.talles || {})[sd.talle]) || 0;
+                    despues = antes + 1;
+                    tx.update(sRef, new FP('talles', sd.talle), despues, 'actualizadoEn', Date.now());
+                    tx.set(db.collection('stock_casa_historial').doc(), registroHistorial(sd.id, d.nombre, sd.talle, antes, despues, 'pedido-devuelto', quien));
+                }
+                tx.update(pRef, { stockDescontado: null });
+                return { ok: true, despues, nombre, talle: sd.talle };
+            });
+        } else {
+            const peds = lsGet(LS_KEYS.pedidos, []);
+            const p = peds.find(x => x.id === pedidoId);
+            if (!p) return Promise.resolve({ ok: false, motivo: 'no-pedido' });
+            const sd = p.stockDescontado;
+            if (!sd || !sd.id) return Promise.resolve({ ok: false, motivo: 'sin-descuento' });
+            const obj = lsGet(LS_KEYS.stockCasa, {});
+            let despues = null, nombre = '';
+            if (obj[sd.id]) {
+                nombre = obj[sd.id].nombre;
+                despues = (Number((obj[sd.id].talles || {})[sd.talle]) || 0) + 1;
+                obj[sd.id].talles[sd.talle] = despues;
+                lsSet(LS_KEYS.stockCasa, obj);
+            }
+            p.stockDescontado = null; lsSet(LS_KEYS.pedidos, peds);
+            emitStockCasaLocal(); emitPedidosLocal();
+            return Promise.resolve({ ok: true, despues, nombre, talle: sd.talle });
+        }
+    }
+
+    // Desde cuándo se descuenta el stock al ANOTAR el pedido (los anteriores no se tocan).
+    function obtenerMetaStock() {
+        if (modo === 'firebase') return db.collection('config').doc('stock_casa_meta').get().then(d => (d.exists ? d.data() : null));
+        return Promise.resolve(null);
+    }
+
     function registrarMovimientoStock(id, nombre, motivo, quien) {
         const reg = registroHistorial(id, nombre, '', 0, 0, motivo, quien);
         if (modo === 'firebase') return db.collection('stock_casa_historial').add(reg);
@@ -637,7 +736,7 @@ const Store = (function () {
         onRespaldoBorrado, guardarRespaldoBorrado, borrarRespaldoBorrado,
         onClientes, setCliente, eliminarCliente, normalizarIdCliente,
         onEnviosClientes, setEnvioCliente,
-        onStockCasa, guardarModeloStock, cambiarStockTalle, quitarTalleStock, registrarMovimientoStock, obtenerHistorialStock, guardarFotoStock, obtenerFotoStock,
+        onStockCasa, guardarModeloStock, cambiarStockTalle, quitarTalleStock, registrarMovimientoStock, descontarStockDePedido, devolverStockDePedido, obtenerMetaStock, obtenerHistorialStock, guardarFotoStock, obtenerFotoStock,
         onConfig, setConfig,
         registrarCierre, obtenerCierresDelMes,
         onListas, asegurarListaPrincipal, crearLista, eliminarLista,

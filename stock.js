@@ -13,7 +13,7 @@
 (function () {
     'use strict';
 
-    const S = { modelos: {}, cargado: false, q: '', filtro: 'todos', iniciado: false };
+    const S = { modelos: {}, cargado: false, q: '', filtro: 'todos', iniciado: false, desde: null };
     const CLAVE_QUIEN = 'ap_quien';
 
     // ---------- utilidades ---------------------------------------------------
@@ -312,6 +312,7 @@
         manual: 'a mano', deposito: 'depósito (par agarrado)', 'deposito-devuelto': 'depósito (se desmarcó)', alta: 'carga inicial',
         'talle-quitado': 'talle quitado', foto: 'foto', 'modelo-nuevo': 'modelo nuevo', eliminado: 'modelo eliminado',
         restaurado: 'modelo restaurado', renombrado: 'renombrado', migracion: 'migración del Panel Admin',
+        pedido: 'pedido anotado', 'pedido-devuelto': 'pedido borrado o corregido',
     };
     async function abrirHistorial() {
         const h = abrirHoja('<h3 class="stk-h3">🕘 Historial de cambios</h3><p class="stk-ayuda">Cargando…</p>', true);
@@ -503,10 +504,17 @@
         return null;
     }
 
-    // Se llama al marcar VERDE un par. Si el pedido viene de casa (origen) se
-    // descuenta directo; si no, solo cuando hay coincidencia exacta y se confirma.
+    // Nombre guardado de quien usa la app, SIN preguntar (para lo automático).
+    function quienSilencioso() {
+        try { return localStorage.getItem(CLAVE_QUIEN) || 'automático'; } catch (e) { return 'automático'; }
+    }
+
+    // Tick verde en depósito de un par que todavía NO se descontó (pedidos anteriores, o que
+    // al anotarse no había stock). Si viene de casa (origen) se descuenta directo; si no,
+    // solo con coincidencia exacta y confirmando. La marca queda en el pedido (transacción).
     async function descontarParaPedido(p) {
         if (p.casaNo) return { ok: false, motivo: 'casa-no' };
+        if (p.origen === 'proveedor') return { ok: false, motivo: 'proveedor' };
         const esCasa = p.origen === 'casa';
         const hallado = buscarParaPedido(p);
         if (!hallado) {
@@ -520,26 +528,112 @@
         if (!esCasa && !confirm(`📦 "${hallado.nombre}" talle ${hallado.talle} está en tu stock de casa (hay ${hallado.disponible}).\n\n¿Es de casa? Aceptar = descontar 1 del stock.\nCancelar = es del proveedor (no se toca el stock).`)) {
             return { ok: false, motivo: 'cancelado', casaNo: true };
         }
-        const r = await Store.cambiarStockTalle(hallado.id, hallado.talle, { delta: -1 }, 'deposito', quien());
-        if (!r.ok) { aviso(`⚠️ No se pudo descontar: ${hallado.nombre} ${hallado.talle} está en 0.`); return { ok: false, motivo: 'sin-stock' }; }
+        const r = await Store.descontarStockDePedido(p.id, hallado.id, hallado.talle, quien());
+        if (!r.ok) {
+            if (r.motivo === 'sin-stock') aviso(`⚠️ No se pudo descontar: ${hallado.nombre} ${hallado.talle} está en 0.`);
+            return { ok: false, motivo: r.motivo };
+        }
         aviso(`📦 Stock de casa: ${hallado.nombre} ${hallado.talle} → ${r.despues}`);
         return { ok: true, descontado: { id: hallado.id, talle: hallado.talle } };
     }
 
-    async function devolver(descontado) {
-        if (!descontado || !descontado.id) return false;
-        const r = await Store.cambiarStockTalle(descontado.id, descontado.talle, { delta: 1 }, 'deposito-devuelto', quien());
-        if (r.ok) aviso(`↩️ Stock de casa: se devolvió 1 (${(S.modelos[descontado.id] || {}).nombre || ''} ${descontado.talle} → ${r.despues})`);
-        return r.ok;
+    // Devuelve al stock el par que se había descontado de este pedido (se borró o se corrigió).
+    async function devolverPedido(pedidoId) {
+        try {
+            const r = await Store.devolverStockDePedido(pedidoId, quienSilencioso());
+            if (r.ok && r.despues != null) aviso(`↩️ Stock de casa: se devolvió 1 (${r.nombre || ''} ${r.talle} → ${r.despues})`);
+            return !!r.ok;
+        } catch (e) { console.error('Stock de casa (devolver):', e); return false; }
+    }
+
+    // ----- descuento al ANOTAR el pedido ---------------------------------------
+    // Cada pedido NUEVO (creado desde que se activó esto: S.desde) que coincide exacto con un
+    // modelo+talle del stock de casa descuenta 1 enseguida, sin esperar el tick verde: así no
+    // se anotan más pares de los que hay. Se corre en cualquier pantalla abierta (la
+    // transacción garantiza que un pedido descuente una sola vez). Los pedidos anteriores
+    // y los "Cambio" de talle no se tocan.
+    const enCurso = new Set();     // pedidos que se están procesando ahora
+    const resueltos = new Set();   // pedidos ya procesados en esta sesión
+    const avisados = new Set();
+    let procesando = false;
+    let volverAPasar = false;   // llegó una novedad mientras se procesaba: se repasa al terminar
+
+    // Un pedido solo se evalúa en las 24 horas siguientes a anotarse: así uno que se anotó cuando
+    // NO había stock de casa (y era del proveedor) nunca se descuenta días después, si el socio
+    // carga ese modelo más tarde. Los que se evalúan y no son de casa quedan marcados (casaNo).
+    const VENTANA_MS = 24 * 3600 * 1000;
+
+    function elegible(p) {
+        return S.desde && (p.createdAt || 0) >= S.desde && !p.stockDescontado && !p.casaNo
+            && p.origen !== 'proveedor'   // PedidosProveedor ya dijo que lo compró al proveedor
+            && p.pago !== 'Cambio' && p.deposito !== 'faltante' && !resueltos.has(p.id) && !enCurso.has(p.id);
+    }
+
+    function marcarNoCasa(p) {
+        resueltos.add(p.id);
+        Store.updatePedido(p.id, { casaNo: true }).catch(() => {});
+    }
+
+    async function procesarPedidos(lista) {
+        if (!S.cargado || !S.desde || !Array.isArray(lista)) return;
+        if (procesando) { volverAPasar = true; return; }
+        procesando = true;
+        try {
+            for (const p of lista) {
+                if (!elegible(p)) continue;
+                if (Date.now() - (p.createdAt || 0) > VENTANA_MS) { resueltos.add(p.id); continue; }   // viejo: no se toca
+                const h = buscarParaPedido(p);
+                if (!h) {
+                    if (p.origen === 'casa') {
+                        // Dice que es de casa pero no figura: se avisa y queda pendiente (no es del proveedor).
+                        if (!avisados.has(p.id)) { avisados.add(p.id); aviso(`⚠️ "${p.modelo}" (${p.talle}) viene como de casa pero no está en el stock de la app.`); }
+                    } else {
+                        marcarNoCasa(p);   // no está en casa: es del proveedor
+                    }
+                    continue;
+                }
+                if (h.disponible <= 0) {
+                    if (!avisados.has(p.id)) { avisados.add(p.id); aviso(`⚠️ Stock de casa: "${h.nombre}" ${h.talle} ya estaba en 0 al anotar este pedido.`); }
+                    if (p.origen !== 'casa') marcarNoCasa(p);
+                    continue;
+                }
+                enCurso.add(p.id);
+                try {
+                    const r = await Store.descontarStockDePedido(p.id, h.id, h.talle, quienSilencioso());
+                    if (r.ok) aviso(`📦 Stock de casa: ${h.nombre} ${h.talle} → ${r.despues} (pedido de ${p.cliente || '?'})`);
+                    else if (r.motivo === 'sin-stock' && !avisados.has(p.id)) { avisados.add(p.id); aviso(`⚠️ Stock de casa: "${h.nombre}" ${h.talle} ya estaba en 0.`); }
+                    // En cualquier caso se da por resuelto: no se reintenta en bucle.
+                    resueltos.add(p.id);
+                } catch (e) {
+                    console.error('Stock de casa (al anotar):', e);
+                } finally {
+                    enCurso.delete(p.id);
+                }
+            }
+        } finally {
+            procesando = false;
+            if (volverAPasar) {
+                volverAPasar = false;
+                setTimeout(() => procesarPedidos(typeof todosPedidos !== 'undefined' ? todosPedidos : lista), 80);
+            }
+        }
     }
 
     // ---------- arranque -----------------------------------------------------
     function iniciar() {
         if (S.iniciado) return;
         S.iniciado = true;
+        // Desde cuándo se descuenta al anotar (si no está definido, esa parte queda apagada).
+        if (typeof Store.obtenerMetaStock === 'function') {
+            Store.obtenerMetaStock().then(m => {
+                S.desde = (m && Number(m.descuentoDesde)) || null;
+                if (typeof todosPedidos !== 'undefined') procesarPedidos(todosPedidos);
+            }).catch(() => {});
+        }
         Store.onStockCasa(obj => {
             S.modelos = obj || {};
             S.cargado = true;
+            if (typeof todosPedidos !== 'undefined') procesarPedidos(todosPedidos);
             // La lista de pedidos marca con 🏠 los modelos que hay en casa: se redibuja al cambiar el stock.
             if (typeof renderizarTabla === 'function' && !(document.activeElement && document.activeElement.isContentEditable)) renderizarTabla();
             const v = document.getElementById('vista-stock');
@@ -554,5 +648,5 @@
         cargarCatalogo();   // al terminar de leerlo, la pantalla se actualiza sola
     }
 
-    window.StockCasa = { iniciar, abrir, buscarParaPedido, descontarParaPedido, devolver, aviso, _estado: S, _parsearTalles: parsearTalles, _idDeNombre: idDeNombre, _procesarFoto: procesarFoto, _ponerFoto: ponerFoto, _cargarCatalogo: cargarCatalogo, _enCatalogo: enCatalogo, _parecidos: parecidos, _claveCat: claveCat };
+    window.StockCasa = { iniciar, abrir, buscarParaPedido, descontarParaPedido, devolverPedido, procesarPedidos, aviso, _estado: S, _parsearTalles: parsearTalles, _idDeNombre: idDeNombre, _procesarFoto: procesarFoto, _ponerFoto: ponerFoto, _cargarCatalogo: cargarCatalogo, _enCatalogo: enCatalogo, _parecidos: parecidos, _claveCat: claveCat };
 })();

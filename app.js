@@ -760,7 +760,10 @@ window.guardarEdicion = function (id, campo, elemento) {
 
     if (campo === 'modelo' || campo === 'talle') {
         if (pedido[campo] === nuevoValor) return;
-        Store.updatePedido(id, { [campo]: nuevoValor }).then(() => {
+        // Si ya se había descontado del stock de casa, ese descuento era del modelo/talle viejo:
+        // se devuelve y el pedido corregido se vuelve a evaluar solo.
+        const devolver = (pedido.stockDescontado && typeof StockCasa !== 'undefined') ? StockCasa.devolverPedido(id) : Promise.resolve();
+        devolver.then(() => Store.updatePedido(id, { [campo]: nuevoValor })).then(() => {
             if (campo === 'modelo') recomputarPreciosCliente(pedido.cliente, []);
         });
         return;
@@ -835,7 +838,9 @@ window.eliminarPedido = function (id) {
     if (!p) return;
     const ok = confirm(`¿Eliminar este pedido?\n\n${p.cliente} — ${p.modelo} (talle ${p.talle})`);
     if (!ok) return;
-    Store.deletePedido(id).then(() => recomputarPreciosCliente(p.cliente, []));
+    // Si ese par se había descontado del stock de casa al anotarlo, vuelve al stock.
+    const devolver = (p.stockDescontado && typeof StockCasa !== 'undefined') ? StockCasa.devolverPedido(id) : Promise.resolve();
+    devolver.then(() => Store.deletePedido(id)).then(() => recomputarPreciosCliente(p.cliente, []));
 };
 
 // ----------------------------------------------------------------------------
@@ -1687,7 +1692,8 @@ window.tocarDeposito = function (id, boton) {
     menu.id = 'menu-deposito';
     menu.className = 'menu-deposito' + (hoja ? ' menu-deposito-hoja' : '');
     menu.innerHTML = (hoja ? `<div class="menu-deposito-titulo">${escaparHtml((p.cliente || '') + ' · ' + (p.modelo || '') + ' (' + (p.talle || '') + ')')}</div>` : '')
-        + OPCIONES_MENU_DEPOSITO.filter(o => o.valor !== actual).map(o =>
+        + OPCIONES_MENU_DEPOSITO.concat(p.stockDescontado ? [{ valor: '__no_casa', texto: '🏠 No es de casa (devolver al stock)' }] : [])
+            .filter(o => o.valor !== actual).map(o =>
             `<button type="button" data-valor="${o.valor}">${o.texto}</button>`).join('');
     if (hoja) {
         // En el celular el menú sale desde abajo (al alcance del pulgar, sin
@@ -1711,15 +1717,20 @@ window.tocarDeposito = function (id, boton) {
         cerrarMenuDeposito();
         vibrar();
         // El pedido pudo haberse borrado mientras el menú estaba abierto.
-        if (pedidos.some(x => x.id === id)) cambiarDeposito(pedidos.find(x => x.id === id), nuevo);
+        if (!pedidos.some(x => x.id === id)) return;
+        if (nuevo === '__no_casa') {
+            // Se había descontado de casa por coincidencia de nombre, pero es del proveedor.
+            if (typeof StockCasa !== 'undefined') StockCasa.devolverPedido(id).then(() => Store.updatePedido(id, { casaNo: true }));
+            return;
+        }
+        cambiarDeposito(pedidos.find(x => x.id === id), nuevo);
     }));
 };
 
-// Cambia el estado de depósito de un par y, si es de casa, maneja el stock:
-//  • pasa a 🟢 verde  -> descuenta 1 del stock de casa (si es de casa) y lo anota
-//    en el pedido (stockDescontado) para no descontar dos veces;
-//  • sale de verde    -> devuelve ese 1 al stock.
-// La casilla cambia al instante; el stock se ajusta enseguida después.
+// Cambia el estado de depósito de un par. El stock de casa se descuenta al ANOTAR el
+// pedido (ver StockCasa.procesarPedidos), no con el tick: el tick solo descuenta si por
+// alguna razón ese par todavía no se había descontado (pedidos anteriores, o que al anotarse
+// no había stock). Desmarcar el tick NO devuelve el par: el pedido sigue anotado.
 async function cambiarDeposito(p, nuevo) {
     const id = p.id;
     Store.updatePedido(id, { deposito: nuevo });
@@ -1727,11 +1738,7 @@ async function cambiarDeposito(p, nuevo) {
     try {
         if (nuevo === 'ok' && !p.stockDescontado) {
             const r = await StockCasa.descontarParaPedido(p);
-            if (r && r.ok) Store.updatePedido(id, { stockDescontado: r.descontado });
-            else if (r && r.casaNo) Store.updatePedido(id, { casaNo: true });
-        } else if (nuevo !== 'ok' && p.stockDescontado) {
-            const devuelto = await StockCasa.devolver(p.stockDescontado);
-            if (devuelto) Store.updatePedido(id, { stockDescontado: null });
+            if (r && r.casaNo) Store.updatePedido(id, { casaNo: true });
         }
     } catch (e) {
         console.error('Stock de casa:', e);
@@ -2430,6 +2437,7 @@ document.addEventListener('DOMContentLoaded', () => {
             todosPedidos = arr;
             recalcularPedidosActivos();
             programarSyncEnvios();
+            if (typeof StockCasa !== 'undefined' && StockCasa.procesarPedidos) StockCasa.procesarPedidos(todosPedidos);
         });
 
         if (typeof StockCasa !== 'undefined' && typeof Store.onStockCasa === 'function') StockCasa.iniciar();
