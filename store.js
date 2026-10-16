@@ -647,8 +647,8 @@ const Store = (function () {
         return Promise.resolve(null);
     }
 
-    function registrarMovimientoStock(id, nombre, motivo, quien) {
-        const reg = registroHistorial(id, nombre, '', 0, 0, motivo, quien);
+    function registrarMovimientoStock(id, nombre, motivo, quien, extra) {
+        const reg = { ...registroHistorial(id, nombre, '', 0, 0, motivo, quien), ...(extra || {}) };
         if (modo === 'firebase') return db.collection('stock_casa_historial').add(reg);
         const h = lsGet(LS_KEYS.stockHistorial, []);
         h.push(reg); lsSet(LS_KEYS.stockHistorial, h.slice(-300));

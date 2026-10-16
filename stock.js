@@ -54,7 +54,7 @@
     //  • avisar si el modelo va a salir SIN foto en la tienda.
     const URL_CATALOGO = 'https://mitiendazapas.github.io/catalogo/productos.json';
     const BASE_CATALOGO = 'https://mitiendazapas.github.io/catalogo/';
-    const C = { lista: null, porClave: {}, promesa: null };
+    const C = { lista: null, porClave: {}, promesa: null, ok: false };
 
     // Misma idea que normalize() del sincronizador: sin tildes, minúsculas, espacios prolijos.
     function claveCat(s) {
@@ -68,25 +68,58 @@
             .then(d => {
                 const items = Array.isArray(d) ? d : (d.productos || d.products || []);
                 C.lista = items.filter(p => p && p.name).map(p => ({
-                    nombre: p.name, clave: claveCat(p.name),
+                    nombre: p.name, clave: claveCat(p.name), origen: p.origin || [],
                     foto: p.images && p.images[0] ? BASE_CATALOGO + (p.images[0].sm || p.images[0].lg || '') : '',
                     fotoGrande: p.images && p.images[0] ? BASE_CATALOGO + (p.images[0].lg || p.images[0].sm || '') : '',
                 }));
                 C.porClave = {};
                 C.lista.forEach(p => { C.porClave[p.clave] = p; });
+                C.ok = true;
                 const v = document.getElementById('vista-stock');
                 if (v && v.style.display !== 'none') render();
                 const dl = document.getElementById('stk-cat-lista');
                 if (dl) dl.innerHTML = C.lista.map(p => `<option value="${esc(p.nombre)}">`).join('');
                 return C.lista;
             })
-            .catch(e => { console.warn('No se pudo leer el catálogo de la tienda:', e); C.lista = []; C.promesa = null; return []; });
+            .catch(e => { console.warn('No se pudo leer el catálogo de la tienda:', e); C.lista = []; C.ok = false; C.promesa = null; return []; });
         return C.promesa;
     }
     const enCatalogo = nombre => C.porClave[claveCat(nombre)] || null;
     const tieneFotoPropia = m => !!(m.fotoMini || m.fotoVersion || m.fotoRuta);
     // Foto que se va a ver en la tienda: la propia, o la que ya tenga el catálogo con ese nombre.
     function fotoDeTienda(m) { const c = enCatalogo(m.nombre); return c && c.foto ? c : null; }
+
+    // ¿El precio de este modelo lo fijan las reglas de la tienda (porque lo vende el proveedor)
+    // o es solo de casa y se puede poner a mano? Solo se decide cuando ya se leyó el catálogo.
+    function precioEditable(m) {
+        if (!C.ok) return false;
+        const c = enCatalogo(m.nombre);
+        return !(c && c.origen.includes('proveedor'));
+    }
+    // "55000", "55.000", "$ 55.000,00" -> 55000. Menos de 1.000 se toma como miles (42 -> 42.000).
+    function parsearPesos(texto) {
+        let x = String(texto || '').replace(/[^\d.,]/g, '');
+        if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(x)) x = x.replace(/\./g, '').replace(',', '.');
+        else x = x.replace(',', '.');
+        const n = Math.round(parseFloat(x) || 0);
+        return typeof normalizarPrecioIngresado === 'function' ? normalizarPrecioIngresado(n) : n;
+    }
+    const fmtPrecio = n => (Number(n) > 0 ? Number(n).toLocaleString('es-AR') : '');
+
+    async function guardarPrecio(id, campo, texto) {
+        const m = S.modelos[id]; if (!m) return;
+        const vacio = !String(texto).trim();
+        const n = vacio ? null : parsearPesos(texto);
+        if (!vacio && !(n > 0)) { aviso('Poné un precio válido (por ejemplo 55000).'); render(); return; }
+        const actual = Number(m[campo]) > 0 ? Number(m[campo]) : null;
+        if (n === actual) { render(); return; }
+        const unidad = campo === 'precio' ? n : (Number(m.precio) || null);
+        const mayor = campo === 'precioMayor' ? n : (Number(m.precioMayor) || null);
+        await Store.guardarModeloStock(id, { [campo]: n });
+        Store.registrarMovimientoStock(id, m.nombre, campo === 'precio' ? 'precio' : 'precio-mayor', quien(), { antes: actual || 0, despues: n || 0, delta: (n || 0) - (actual || 0) });
+        if (unidad && mayor && mayor >= unidad) aviso('⚠️ El precio por mayor tiene que ser MENOR que el de venta: si no, la tienda lo ignora.');
+        else aviso(n ? `💲 ${m.nombre}: ${campo === 'precio' ? 'precio' : 'por mayor'} $${fmtPrecio(n)}` : `💲 ${m.nombre}: vuelve al precio automático`);
+    }
 
     // Nombres parecidos del catálogo (por palabras en común), para corregir errores de tipeo.
     function parecidos(nombre, max) {
@@ -312,7 +345,7 @@
         manual: 'a mano', deposito: 'depósito (par agarrado)', 'deposito-devuelto': 'depósito (se desmarcó)', alta: 'carga inicial',
         'talle-quitado': 'talle quitado', foto: 'foto', 'modelo-nuevo': 'modelo nuevo', eliminado: 'modelo eliminado',
         restaurado: 'modelo restaurado', renombrado: 'renombrado', migracion: 'migración del Panel Admin',
-        pedido: 'pedido anotado', 'pedido-devuelto': 'pedido borrado o corregido',
+        pedido: 'pedido anotado', 'pedido-devuelto': 'pedido borrado o corregido', precio: 'precio de venta', 'precio-mayor': 'precio por mayor',
     };
     async function abrirHistorial() {
         const h = abrirHoja('<h3 class="stk-h3">🕘 Historial de cambios</h3><p class="stk-ayuda">Cargando…</p>', true);
@@ -323,7 +356,7 @@
             <h3 class="stk-h3">🕘 Historial de cambios <span class="stk-ayuda">(últimos ${items.length})</span></h3>
             ${items.length === 0 ? '<p class="stk-ayuda">Todavía no hay cambios registrados.</p>' : `<ul class="stk-historial">${items.map(i => `
                 <li><span class="stk-hist-f">${fecha(i.ts)}</span>
-                <span><strong>${esc(i.nombre)}</strong>${i.talle ? ` · talle ${esc(i.talle)}: <strong>${i.antes} → ${i.despues}</strong>` : ''}
+                <span><strong>${esc(i.nombre)}</strong>${(i.motivo === 'precio' || i.motivo === 'precio-mayor') ? ` · ${i.motivo === 'precio' ? 'Precio' : 'Por mayor'}: <strong>${i.antes ? '$' + fmtPrecio(i.antes) : 'automático'} → ${i.despues ? '$' + fmtPrecio(i.despues) : 'automático'}</strong>` : (i.talle ? ` · talle ${esc(i.talle)}: <strong>${i.antes} → ${i.despues}</strong>` : '')}
                 <span class="stk-ayuda"> · ${esc(ETIQUETA_MOTIVO[i.motivo] || i.motivo)}${i.quien ? ' · ' + esc(i.quien) : ''}</span></span></li>`).join('')}</ul>`}
             <div class="stk-botones"><button type="button" class="btn btn-outline" data-acc="cerrar">Cerrar</button></div>`;
         h.querySelector('[data-acc="cerrar"]').addEventListener('click', cerrarHoja);
@@ -400,6 +433,12 @@
                     <button type="button" class="stk-bt" data-acc="mas" data-id="${esc(id)}" data-talle="${esc(t)}" aria-label="Sumar uno">＋</button>
                 </div>`).join('')}
             </div>
+            ${precioEditable(m) ? `
+            <div class="stk-precio">
+                <span class="stk-precio-t" title="Este modelo no lo vende el proveedor: el precio lo ponés vos. Se publica en la próxima vuelta del piloto.">💲 Precio en la tienda</span>
+                <label>Venta <input class="stk-in-precio" type="text" inputmode="numeric" data-acc="precio" data-id="${esc(id)}" value="${esc(fmtPrecio(m.precio))}" placeholder="automático" aria-label="Precio de venta"></label>
+                <label>Por mayor <input class="stk-in-precio" type="text" inputmode="numeric" data-acc="precioMayor" data-id="${esc(id)}" value="${esc(fmtPrecio(m.precioMayor))}" placeholder="automático" aria-label="Precio por mayor"></label>
+            </div>` : (C.ok ? '<p class="stk-ayuda stk-precio-auto">💲 Precio: lo fija la tienda (modelo del proveedor).</p>' : '')}
             <div class="stk-agregar">
                 <input class="stk-in-talle" type="text" inputmode="decimal" placeholder="Talle" aria-label="Talle nuevo">
                 <input class="stk-in-cant" type="number" inputmode="numeric" min="1" value="1" aria-label="Cantidad">
@@ -480,6 +519,8 @@
             }
         });
         cont.addEventListener('change', e => {
+            const pr = e.target.closest('[data-acc="precio"], [data-acc="precioMayor"]');
+            if (pr) { guardarPrecio(pr.dataset.id, pr.dataset.acc, pr.value); return; }
             const el = e.target.closest('[data-acc="fijar"]'); if (!el) return;
             const v = Math.max(0, parseInt(el.value) || 0);
             cambiar(el.dataset.id, el.dataset.talle, { valor: v }, 'manual');
@@ -648,5 +689,5 @@
         cargarCatalogo();   // al terminar de leerlo, la pantalla se actualiza sola
     }
 
-    window.StockCasa = { iniciar, abrir, buscarParaPedido, descontarParaPedido, devolverPedido, procesarPedidos, aviso, _estado: S, _parsearTalles: parsearTalles, _idDeNombre: idDeNombre, _procesarFoto: procesarFoto, _ponerFoto: ponerFoto, _cargarCatalogo: cargarCatalogo, _enCatalogo: enCatalogo, _parecidos: parecidos, _claveCat: claveCat };
+    window.StockCasa = { iniciar, abrir, buscarParaPedido, descontarParaPedido, devolverPedido, procesarPedidos, aviso, _estado: S, _parsearTalles: parsearTalles, _idDeNombre: idDeNombre, _procesarFoto: procesarFoto, _ponerFoto: ponerFoto, _cargarCatalogo: cargarCatalogo, _precioEditable: precioEditable, _parsearPesos: parsearPesos, _guardarPrecio: guardarPrecio, _enCatalogo: enCatalogo, _parecidos: parecidos, _claveCat: claveCat };
 })();
