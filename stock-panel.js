@@ -37,6 +37,7 @@
     const fmtTalle = t => String(t == null ? '' : t).trim().replace(',', '.').replace(/\s+/g, '');
 
     let modelos = {};
+    let tocadoHasta = 0;   // mientras se toca el stock acá, la relectura no pisa lo que se ve
     let cargado = false;
     let oyentes = [];
     let reloj = null;
@@ -63,9 +64,15 @@
         try {
             const r = await fetch(`${CATALOGO}?t=${Date.now()}`, { cache: 'no-store' });
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            modelos = convertir(await r.json());
+            const nuevos = convertir(await r.json());
+            // Recién tocado acá: el catálogo tarda unos segundos en mostrarlo; no se pisa.
+            if (Date.now() < tocadoHasta) return;
+            modelos = nuevos;
             cargado = true;
             avisar();
+            // Si la pestaña está abierta (y no se está escribiendo un talle), se actualiza sola.
+            const vista = document.getElementById('vista-stock');
+            if (vista && vista.style.display !== 'none' && !vista.contains(document.activeElement)) pintarPestana();
         } catch (e) {
             console.error('No se pudo leer el stock de casa del panel:', e);
         }
@@ -176,26 +183,87 @@
         return r;
     };
 
-    // ---- pestaña "Stock de casa": ahora es un acceso al panel ---------------------
+    // ---- pestaña "Stock de casa": se suma, resta y agrega talles acá mismo (se guarda en el panel) --
+    // Cada cambio se manda al panel de la tienda ("ajustar"): lo ven el panel, la tienda y las demás
+    // tiendas. Si se cambia desde el panel, acá se ve solo (se relee cada 30 segundos).
+    const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const ordenTalle = (a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0) || String(a).localeCompare(String(b));
+
     function pintarPestana() {
         const vista = document.getElementById('vista-stock');
         if (!vista) return;
-        const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-        const filas = Object.values(modelos)
-            .map(m => ({ ...m, total: Object.values(m.talles).reduce((a, b) => a + (Number(b) || 0), 0) }))
-            .filter(m => m.total > 0)
-            .sort((a, b) => a.nombre.localeCompare(b.nombre))
-            .map(m => `<li style="padding:8px 0;border-bottom:1px solid rgba(127,127,127,.25)"><strong>${esc(m.nombre)}</strong><br><small>${
-                Object.entries(m.talles).filter(([, n]) => n > 0).map(([t, n]) => `${esc(t)}: ${n}`).join(' · ')}</small></li>`).join('');
-        vista.innerHTML = `<div style="max-width:640px;margin:0 auto;padding:16px">
-            <h2 style="margin:0 0 8px">Stock de casa</h2>
-            <p style="margin:0 0 14px">Ahora el stock de casa se carga y se cambia en el <strong>panel de la tienda</strong>: modelos, talles, fotos y precios. Lo que cambies ahí se ve en todas las tiendas.</p>
-            <p style="margin:0 0 18px">Acá, al anotar un pedido de casa, el par se sigue descontando solo.</p>
-            <a href="${PANEL}" target="_blank" rel="noopener" style="display:inline-block;padding:12px 18px;border-radius:12px;background:#18181b;color:#fff;font-weight:600;text-decoration:none">Abrir el panel</a>
-            <h3 style="margin:24px 0 4px">Lo que hay ahora</h3>
-            ${cargado ? (filas ? `<ul style="list-style:none;margin:0;padding:0">${filas}</ul>` : '<p>No hay pares de casa con stock.</p>') : '<p>Cargando…</p>'}
+        const tarjetas = Object.entries(modelos)
+            .sort(([, a], [, b]) => a.nombre.localeCompare(b.nombre))
+            .map(([id, m]) => {
+                const total = Object.values(m.talles).reduce((a, b) => a + (Number(b) || 0), 0);
+                const talles = Object.keys(m.talles).sort(ordenTalle).map(t => `
+                    <div class="sp-talle${m.talles[t] > 0 ? '' : ' sp-cero'}">
+                        <strong>${esc(t)}</strong>
+                        <button type="button" data-id="${esc(id)}" data-talle="${esc(t)}" data-delta="-1" aria-label="Restar uno al talle ${esc(t)} de ${esc(m.nombre)}">−</button>
+                        <output>${m.talles[t]}</output>
+                        <button type="button" data-id="${esc(id)}" data-talle="${esc(t)}" data-delta="1" aria-label="Sumar uno al talle ${esc(t)} de ${esc(m.nombre)}">+</button>
+                    </div>`).join('');
+                return `<li class="sp-modelo">
+                    <div class="sp-cab"><strong>${esc(m.nombre)}</strong><span class="${total ? '' : 'sp-sin'}">${total ? `${total} ${total === 1 ? 'par' : 'pares'}` : 'Sin stock'}</span></div>
+                    <div class="sp-talles">${talles}
+                        <form class="sp-nuevo" data-id="${esc(id)}"><input name="t" maxlength="12" placeholder="Talle" autocomplete="off" aria-label="Talle nuevo de ${esc(m.nombre)}"><button aria-label="Agregar talle">+ Talle</button></form>
+                    </div></li>`;
+            }).join('');
+        vista.innerHTML = `<style>
+            .sp{max-width:760px;margin:0 auto;padding:16px}.sp h2{margin:0 0 6px}.sp p{margin:0 0 12px}
+            .sp-lista{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+            .sp-modelo{padding:12px;border:1px solid rgba(127,127,127,.3);border-radius:12px}
+            .sp-cab{display:flex;justify-content:space-between;gap:8px;margin-bottom:8px}.sp-sin{color:#c62828;font-weight:600}
+            .sp-talles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px}
+            .sp-talle{display:flex;align-items:center;gap:4px;padding:4px 4px 4px 10px;border-radius:10px;background:rgba(127,127,127,.12)}
+            .sp-talle strong{flex:1}.sp-talle output{min-width:2ch;text-align:center;font-weight:700}
+            .sp-talle button,.sp-nuevo button{min-width:44px;min-height:44px;border:1px solid rgba(127,127,127,.35);border-radius:10px;background:transparent;color:inherit;font:inherit;font-size:20px;cursor:pointer}
+            .sp-cero{opacity:.6}.sp-nuevo{display:flex;gap:4px}.sp-nuevo input{flex:1;min-width:0;min-height:44px;padding:0 10px;border:1px dashed rgba(127,127,127,.6);border-radius:10px;background:transparent;color:inherit;font:inherit}
+            .sp-nuevo button{font-size:15px;font-weight:600;padding:0 10px}
+        </style>
+        <div class="sp">
+            <h2>Stock de casa</h2>
+            <p>Sumá con + cuando te llegue y restá con − cuando vendas. Se guarda en el panel de la tienda y se ve en todas las tiendas. Al anotar un pedido de casa, el par se descuenta solo.</p>
+            <p><a href="${PANEL}" target="_blank" rel="noopener">Abrir el panel</a> (fotos, precios y modelos nuevos)</p>
+            ${!EN_SITIO ? '<p><strong>Para cambiar el stock, abrí la app en mitiendastock.com/pedidos</strong></p>' : ''}
+            ${cargado ? (tarjetas ? `<ul class="sp-lista">${tarjetas}</ul>` : '<p>No hay stock de casa cargado.</p>') : '<p>Cargando…</p>'}
         </div>`;
     }
+
+    async function ajustar(id, talle, delta) {
+        const m = modelos[id];
+        if (!m) return;
+        const antes = Number(m.talles[talle]) || 0;
+        if (antes + delta < 0) return;
+        m.talles[talle] = antes + delta;   // se ve al toque; si falla, vuelve
+        tocadoHasta = Date.now() + 25000;
+        pintarPestana();
+        try {
+            const r = await moverEnPanel({ accion: 'ajustar', id, talle, delta });
+            if (!r.ok) throw new Error('Ese modelo ya no está en el panel.');
+            m.talles[talle] = r.despues;
+            avisar();
+        } catch (e) {
+            m.talles[talle] = antes;
+            alert(e.message || 'No se pudo guardar. Probá de nuevo.');
+        }
+        pintarPestana();
+    }
+
+    document.addEventListener('click', (e) => {
+        const b = e.target.closest('#vista-stock [data-delta]');
+        if (b) ajustar(b.dataset.id, b.dataset.talle, Number(b.dataset.delta));
+    });
+    document.addEventListener('submit', (e) => {
+        const f = e.target.closest('#vista-stock .sp-nuevo');
+        if (!f) return;
+        e.preventDefault();
+        const talle = f.t.value.trim();
+        const m = modelos[f.dataset.id];
+        if (!talle || !m) return;
+        const existente = Object.keys(m.talles).find(t => t.toLowerCase() === talle.toLowerCase());
+        ajustar(f.dataset.id, existente || talle, 1);
+    });
 
     if (window.StockCasa) {
         const iniciar = window.StockCasa.iniciar;
