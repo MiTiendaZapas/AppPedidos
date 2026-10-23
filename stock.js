@@ -641,6 +641,9 @@
                 enCurso.add(p.id);
                 try {
                     const r = await Store.descontarStockDePedido(p.id, h.id, h.talle, quienSilencioso());
+                    // Sin sesión del panel (GitHub sin ingresar): el pedido NO se da por resuelto y se deja de
+                    // intentar con los demás; se retoma apenas se ingresa (stock-panel.js vuelve a llamar acá).
+                    if (r.motivo === 'sin-panel') break;
                     if (r.ok) aviso(`📦 Stock de casa: ${h.nombre} ${h.talle} → ${r.despues} (pedido de ${p.cliente || '?'})`);
                     else if (r.motivo === 'sin-stock' && !avisados.has(p.id)) { avisados.add(p.id); aviso(`⚠️ Stock de casa: "${h.nombre}" ${h.talle} ya estaba en 0.`); }
                     // En cualquier caso se da por resuelto: no se reintenta en bucle.

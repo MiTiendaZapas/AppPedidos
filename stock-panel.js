@@ -8,8 +8,11 @@
 //  • Ver el stock: se lee el catálogo PÚBLICO de la tienda (no hace falta clave).
 //      - productos propios del panel  -> modelos solo de casa   (id "p:<código>")
 //      - "pares tuyos" en modelos del proveedor                  (id "b:<código>")
-//  • Descontar / devolver por un pedido: /api/panel/casa, con la sesión del panel. Por eso la
-//    app tiene que abrirse en mitiendastock.com/pedidos/ (misma página que el panel).
+//  • Descontar / devolver por un pedido, y sumar / restar desde la pestaña:
+//      - En mitiendastock.com/pedidos: /api/panel/casa, con la cookie de la sesión del panel.
+//      - En GitHub (mitiendazapas.github.io): /api/app/casa con un TOKEN (Authorization: Bearer). El
+//        token sale de /api/app/ingresar (usuario y clave del panel, que se escriben en la pestaña
+//        "Stock de casa"); se guarda en el celular 30 días. La clave NUNCA se guarda.
 //    El panel recuerda qué pedido descontó qué par: un pedido nunca descuenta dos veces.
 //  • PedidosProveedor (en la compu) solo lee el stock: también lo toma de acá.
 // ============================================================================
@@ -31,6 +34,28 @@
     const BASE_FOTOS = `${BASE}/api/tienda/${TIENDA}/`;   // las fotos de productos propios vienen relativas ("fotos/...")
     const PANEL = `${BASE}/${TIENDA}/panel/`;
     const CADA_MS = 30000;
+
+    // ---- token de la app (solo en GitHub) ---------------------------------------------------------
+    // En mitiendastock.com todo sigue igual (cookie). En GitHub, el panel acepta cambios de stock con
+    // un token que se pide con usuario y clave. Se guarda { token, expira, tienda, usuario }: la clave no.
+    const CLAVE_TOKEN = 'stockCasa:token';
+    const USUARIO_PANEL = 'laimp';
+    let sesionVencida = false;   // para avisar "Tu sesión venció" en vez del cartel de siempre
+
+    function borrarToken() { try { localStorage.removeItem(CLAVE_TOKEN); } catch (e) { /* sin almacenamiento */ } }
+    function guardarToken(t) {
+        try { localStorage.setItem(CLAVE_TOKEN, JSON.stringify({ token: t.token, expira: Number(t.expira), tienda: t.tienda || TIENDA, usuario: t.usuario || '' })); }
+        catch (e) { /* sin almacenamiento: la sesión dura hasta cerrar la pestaña */ }
+    }
+    function leerToken() {
+        let t = null;
+        try { t = JSON.parse(localStorage.getItem(CLAVE_TOKEN) || 'null'); } catch (e) { t = null; }
+        if (!t || typeof t.token !== 'string' || !t.token) return null;
+        if (!(Number(t.expira) > Date.now())) { borrarToken(); sesionVencida = true; return null; }   // venció
+        return t;
+    }
+    // ¿Se puede cambiar el stock? En el sitio, sí (cookie del panel); en GitHub, solo con un token válido.
+    const puedeEditar = () => EN_SITIO || !!leerToken();
 
     const norm = s => (typeof normalizarTexto === 'function' ? normalizarTexto(String(s || '')) : String(s || '').toLowerCase()).trim();
     const fmtTalle = t => String(t == null ? '' : t).trim().replace(',', '.').replace(/\s+/g, '');
@@ -159,8 +184,25 @@
         });
     }
 
+    // GitHub: el mismo pedido y la misma respuesta que /api/panel/casa, pero con el token. Sin cookies.
+    async function moverConToken(cuerpo) {
+        const t = leerToken();
+        if (!t) throw new Error(sesionVencida ? 'Tu sesión venció, ingresá de nuevo.' : 'Ingresá en la pestaña Stock de casa para cambiar el stock.');
+        const r = await fetch(`${SITIO}/api/app/casa`, { method: 'POST', credentials: 'omit',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t.token}` }, body: JSON.stringify(cuerpo) });
+        const d = await r.json().catch(() => ({}));
+        if (r.status === 401) {   // token vencido, o la clave se cambió: se vuelve al formulario
+            borrarToken();
+            sesionVencida = true;
+            pintarPestana();
+            throw new Error('Tu sesión venció, ingresá de nuevo.');
+        }
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        return d;
+    }
+
     async function moverEnPanel(cuerpo, reintento) {
-        if (!EN_SITIO) throw new Error('Para descontar el stock de casa abrí la app en mitiendastock.com/pedidos');
+        if (!EN_SITIO) return moverConToken(cuerpo);
         const r = await fetch('/api/panel/casa', { method: 'POST', credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cuerpo) });
         if (r.status === 401 && !reintento) { await pedirIngreso(); return moverEnPanel(cuerpo, true); }
@@ -176,9 +218,9 @@
     }
 
     // Igual que antes: devuelve { ok, despues, nombre, motivo }. La marca en el pedido sigue en Firebase.
-    // Desde GitHub el panel no acepta cambios: no se descuenta ni se devuelve nada (y se avisa una vez).
-    // El pedido NO se marca: cuando alguien abra la app en mitiendastock.com/pedidos (dentro de las 24 h)
-    // se descuenta ahí.
+    // Desde GitHub SIN sesión (sin token) no se descuenta ni se devuelve nada (y se avisa una vez). El pedido
+    // NO se marca: apenas se ingrese en la pestaña Stock de casa (o se abra la app en mitiendastock.com/pedidos),
+    // dentro de las 24 h, se descuenta. Con token, funciona igual que en el sitio.
     let avisadoSinPanel = false;
     function avisarSinPanel(texto) {
         if (avisadoSinPanel || !window.StockCasa || !window.StockCasa.aviso) return;
@@ -187,8 +229,8 @@
     }
 
     Store.descontarStockDePedido = async function (pedidoId, modeloId, talle) {
-        if (!EN_SITIO) {
-            avisarSinPanel('ℹ️ Desde GitHub no se descuenta el stock de casa: se hace al abrir la app en mitiendastock.com/pedidos.');
+        if (!puedeEditar()) {
+            avisarSinPanel('ℹ️ Para descontar el stock de casa ingresá en la pestaña Stock de casa (o abrí la app en mitiendastock.com/pedidos).');
             return { ok: false, motivo: 'sin-panel' };
         }
         talle = String(talle).trim();
@@ -216,8 +258,8 @@
     }
 
     Store.devolverStockDePedido = async function (pedidoId) {
-        if (!EN_SITIO) {
-            avisarSinPanel('⚠️ Ese pedido había descontado un par del stock de casa y desde GitHub no se puede devolver: abrí la app en mitiendastock.com/pedidos.');
+        if (!puedeEditar()) {
+            avisarSinPanel('⚠️ Ese pedido había descontado un par del stock de casa y no se pudo devolver: ingresá en la pestaña Stock de casa (o abrí la app en mitiendastock.com/pedidos).');
             return { ok: false, motivo: 'sin-panel' };
         }
         const snap = await firebase.firestore().collection('pedidos').doc(pedidoId).get();
@@ -265,7 +307,16 @@
         .sp-talle strong{flex:1;min-width:0}.sp-talle output{min-width:2ch;text-align:center;font-weight:700}
         .sp-talle button,.sp-nuevo button,.sp-btn{min-width:44px;min-height:44px;border:1px solid var(--border,rgba(127,127,127,.35));border-radius:10px;background:transparent;color:inherit;font:inherit;font-size:20px;cursor:pointer}
         .sp button:disabled,.sp input:disabled{opacity:.4;cursor:not-allowed}
-        .sp-solo-ver{padding:10px 12px;border-radius:10px;background:var(--info-bg,rgba(2,132,199,.12))}
+        .sp-acceso:empty{display:none}.sp-acceso{margin:0 0 12px}
+        .sp-ingreso{display:grid;gap:8px;padding:12px;border-radius:12px;border:1px solid var(--border,rgba(127,127,127,.3));background:var(--info-bg,rgba(2,132,199,.10))}
+        .sp-ingreso p{margin:0 !important}
+        .sp-ingreso label{display:grid;gap:4px;font-size:13px;font-weight:600}
+        .sp-ingreso input{width:100%;box-sizing:border-box;min-height:44px;padding:0 12px;border:1px solid var(--border,rgba(127,127,127,.4));border-radius:10px;background:var(--surface,#fff);color:inherit;font:inherit}
+        .sp-clave{display:flex;gap:6px}.sp-clave input{flex:1;min-width:0}
+        .sp-clave button,.sp-sesion button{min-height:44px;padding:0 12px;border:1px solid var(--border,rgba(127,127,127,.4));border-radius:10px;background:transparent;color:inherit;font:inherit;font-weight:600;cursor:pointer}
+        .sp-ingreso .sp-primario{width:100%}
+        .sp-vencida{font-weight:700;color:var(--warning,#b45309)}
+        .sp-sesion{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--text-muted,#64748b)}
         .sp-cero{opacity:.6}.sp-nuevo{display:flex;gap:4px;min-width:0}.sp-nuevo input{flex:1;min-width:0;min-height:44px;padding:0 10px;border:1px dashed rgba(127,127,127,.6);border-radius:10px;background:transparent;color:inherit;font:inherit}
         .sp-nuevo button{font-size:15px;font-weight:600;padding:0 10px}
         @media (max-width:480px){.sp-talles{grid-template-columns:1fr}}
@@ -296,10 +347,10 @@
             <h2>Stock de casa</h2>
             <p>Sumá con + cuando te llegue y restá con − cuando vendas. Se guarda en el panel de la tienda y se ve en todas las tiendas. Al anotar un pedido de casa, el par se descuenta solo.</p>
             <p><a href="${PANEL}" target="_blank" rel="noopener">Abrir el panel</a> (fotos, precios y modelos nuevos)</p>
-            ${!EN_SITIO ? `<p class="sp-solo-ver"><strong>Estás viendo el stock en modo consulta.</strong> Para sumar, restar o agregar modelos abrí la app en <a href="${SITIO}/pedidos/" target="_blank" rel="noopener">mitiendastock.com/pedidos</a> (el panel solo acepta cambios desde ahí).</p>` : ''}
+            <div id="sp-acceso" class="sp-acceso"></div>
             <div class="sp-barra">
                 <input type="search" id="sp-buscar" placeholder="Nombre o marca" autocomplete="off" aria-label="Buscar modelo por nombre o marca">
-                <button type="button" id="sp-agregar" class="sp-primario"${EN_SITIO ? '' : ' disabled title="Solo se puede agregar desde mitiendastock.com/pedidos"'}>+ Agregar modelo</button>
+                <button type="button" id="sp-agregar" class="sp-primario">+ Agregar modelo</button>
             </div>
             <div id="sp-resultado" aria-live="polite"></div>
         </div>`;
@@ -325,7 +376,7 @@
         const pares = todas.reduce((s, [, m]) => s + totalDe(m), 0);
         const tarjetas = lista.map(([id, m]) => {
             const total = totalDe(m);
-            const desactivar = EN_SITIO ? '' : ' disabled';   // en GitHub el panel no acepta cambios
+            const desactivar = puedeEditar() ? '' : ' disabled';   // en GitHub, sin sesión, el panel no acepta cambios
             const talles = Object.keys(m.talles).sort(ordenTalle).map(t => `
                     <div class="sp-talle${m.talles[t] > 0 ? '' : ' sp-cero'}">
                         <strong>${esc(t)}</strong>
@@ -348,8 +399,71 @@
                 : (todas.length ? '<p>Ningún modelo coincide con la búsqueda.</p>' : '<p>No hay stock de casa cargado. Tocá “+ Agregar modelo” para sumar el primero.</p>'));
     }
 
+    // Zona de acceso (solo en GitHub): formulario de ingreso sin sesión, o "Ingresaste como X · Salir" con sesión.
+    // Solo se vuelve a dibujar si cambió el estado (así no se pierde lo que se está escribiendo).
+    function pintarAcceso() {
+        const vista = document.getElementById('vista-stock');
+        const zona = document.getElementById('sp-acceso');
+        const agregar = document.getElementById('sp-agregar');
+        if (!vista || !zona) return;
+        const t = EN_SITIO ? null : leerToken();   // leerToken puede marcar la sesión como vencida
+        const estado = EN_SITIO ? 'sitio' : (t ? 'con' : (sesionVencida ? 'sin-vencida' : 'sin'));
+        if (agregar) {
+            agregar.disabled = !(EN_SITIO || t);
+            agregar.title = agregar.disabled ? 'Ingresá con tu usuario del panel para agregar modelos' : '';
+        }
+        if (zona.dataset.estado === estado) return;
+        zona.dataset.estado = estado;
+        if (estado === 'sitio') { zona.innerHTML = ''; return; }
+        if (t) {
+            zona.innerHTML = `<div class="sp-sesion"><span>✅ Ingresaste${t.usuario ? ` como <strong>${esc(t.usuario)}</strong>` : ''}. Podés cambiar el stock.</span><button type="button" data-salir>Salir</button></div>`;
+            return;
+        }
+        zona.innerHTML = `<form class="sp-ingreso" autocomplete="on">
+            ${sesionVencida ? '<p class="sp-vencida" role="status">Tu sesión venció, ingresá de nuevo.</p>' : ''}
+            <p><strong>Estás viendo el stock en modo consulta.</strong> Para sumar, restar o agregar modelos, ingresá con tu usuario del panel (una sola vez en este celular).</p>
+            <label>Usuario<input name="u" value="${esc(USUARIO_PANEL)}" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+            <label>Clave<span class="sp-clave"><input name="c" type="password" autocomplete="current-password" required><button type="button" data-mostrar aria-pressed="false">Mostrar</button></span></label>
+            <p class="sp-error" data-error role="alert" hidden></p>
+            <button type="submit" class="sp-primario">Ingresar</button>
+        </form>`;
+    }
+
+    async function ingresar(form) {
+        const error = form.querySelector('[data-error]');
+        const boton = form.querySelector('button[type=submit]');
+        const usuario = form.u.value.trim();
+        const clave = form.c.value;
+        error.hidden = true;
+        boton.disabled = true; boton.textContent = 'Ingresando…';
+        try {
+            const r = await fetch(`${SITIO}/api/app/ingresar`, { method: 'POST', credentials: 'omit',
+                headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ usuario, clave }) });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok || !d.token) {
+                error.textContent = d.error || 'No se pudo ingresar. Probá de nuevo.';
+                error.hidden = false;
+                return;
+            }
+            guardarToken({ token: d.token, expira: d.expira, tienda: d.tienda, usuario });   // la clave no se guarda
+            sesionVencida = false;
+            form.c.value = '';
+            pintarPestana();
+            if (window.StockCasa && window.StockCasa.aviso) window.StockCasa.aviso('✅ Listo: ya podés cambiar el stock de casa.');
+            // Pedidos que esperaban (anotados sin sesión, dentro de las 24 h): se descuentan ahora.
+            if (window.StockCasa && window.StockCasa.procesarPedidos && typeof todosPedidos !== 'undefined') window.StockCasa.procesarPedidos(todosPedidos);
+        } catch (e) {
+            error.textContent = 'Sin conexión. Probá de nuevo.';
+            error.hidden = false;
+        } finally {
+            form.c.value = '';   // nunca se deja la clave escrita en pantalla
+            boton.disabled = false; boton.textContent = 'Ingresar';
+        }
+    }
+
     function pintarPestana() {
         if (!armarCascara()) return;
+        pintarAcceso();
         pintarLista();
     }
 
@@ -401,7 +515,7 @@
     const MAX_FILAS = 40;
 
     function abrirAgregar() {
-        if (!EN_SITIO) return;   // desde GitHub el panel no acepta cambios (el botón ya está desactivado)
+        if (!puedeEditar()) return;   // sin sesión el botón ya está desactivado
         const h = abrirHoja(`<h3>Agregar modelo al stock de casa</h3>
             <input type="search" id="sp-elegir-q" placeholder="Buscar por nombre o marca" autocomplete="off" aria-label="Buscar en todos los modelos de la tienda">
             <div id="sp-elegir"></div>
@@ -505,6 +619,24 @@
         if (!talle || !m) return;
         const existente = Object.keys(m.talles).find(t => t.toLowerCase() === talle.toLowerCase());
         ajustar(f.dataset.id, existente || talle, 1);
+    });
+    document.addEventListener('submit', (e) => {
+        const f = e.target.closest('#vista-stock .sp-ingreso');
+        if (!f) return;
+        e.preventDefault();
+        ingresar(f);
+    });
+    document.addEventListener('click', (e) => {
+        const ver = e.target.closest('#vista-stock [data-mostrar]');
+        if (ver) {
+            const campo = ver.closest('.sp-clave').querySelector('input');
+            const mostrar = campo.type === 'password';
+            campo.type = mostrar ? 'text' : 'password';
+            ver.textContent = mostrar ? 'Ocultar' : 'Mostrar';
+            ver.setAttribute('aria-pressed', mostrar ? 'true' : 'false');
+            return;
+        }
+        if (e.target.closest('#vista-stock [data-salir]')) { borrarToken(); sesionVencida = false; pintarPestana(); }
     });
     document.addEventListener('input', (e) => {
         if (e.target && e.target.id === 'sp-buscar') { buscar = e.target.value; pintarLista(); }
