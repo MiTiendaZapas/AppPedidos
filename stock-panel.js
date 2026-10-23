@@ -21,11 +21,9 @@
 
     const TIENDA = 'laimp';
     const SITIO = 'https://mitiendastock.com';
-    // La copia vieja (GitHub) pasa a la dirección nueva, que es la que puede descontar en el panel.
-    if (location.hostname === 'mitiendazapas.github.io') {
-        location.replace(`${SITIO}/pedidos/${location.search}${location.hash}`);
-        return;
-    }
+    // La app puede usarse desde GitHub (mitiendazapas.github.io): ahí NO hay redirección. Desde GitHub se
+    // lee el catálogo público (stock, fotos, marcas), pero el panel solo acepta cambios de stock desde su
+    // propio sitio (EN_SITIO): en GitHub los botones de sumar/restar quedan desactivados con un aviso.
     const EN_SITIO = location.hostname === 'mitiendastock.com' || location.hostname.endsWith('.mitiendastock.pages.dev')
         || ((location.hostname === '127.0.0.1' || location.hostname === 'localhost') && location.port === '8788');
     const BASE = EN_SITIO ? '' : SITIO;
@@ -178,7 +176,21 @@
     }
 
     // Igual que antes: devuelve { ok, despues, nombre, motivo }. La marca en el pedido sigue en Firebase.
+    // Desde GitHub el panel no acepta cambios: no se descuenta ni se devuelve nada (y se avisa una vez).
+    // El pedido NO se marca: cuando alguien abra la app en mitiendastock.com/pedidos (dentro de las 24 h)
+    // se descuenta ahí.
+    let avisadoSinPanel = false;
+    function avisarSinPanel(texto) {
+        if (avisadoSinPanel || !window.StockCasa || !window.StockCasa.aviso) return;
+        avisadoSinPanel = true;
+        window.StockCasa.aviso(texto);
+    }
+
     Store.descontarStockDePedido = async function (pedidoId, modeloId, talle) {
+        if (!EN_SITIO) {
+            avisarSinPanel('ℹ️ Desde GitHub no se descuenta el stock de casa: se hace al abrir la app en mitiendastock.com/pedidos.');
+            return { ok: false, motivo: 'sin-panel' };
+        }
         talle = String(talle).trim();
         const r = await moverEnPanel({ accion: 'descontar', pedido: pedidoId, id: modeloId, talle });
         if (r.ok || r.motivo === 'ya-descontado') {
@@ -204,6 +216,10 @@
     }
 
     Store.devolverStockDePedido = async function (pedidoId) {
+        if (!EN_SITIO) {
+            avisarSinPanel('⚠️ Ese pedido había descontado un par del stock de casa y desde GitHub no se puede devolver: abrí la app en mitiendastock.com/pedidos.');
+            return { ok: false, motivo: 'sin-panel' };
+        }
         const snap = await firebase.firestore().collection('pedidos').doc(pedidoId).get();
         const sd = snap.exists ? snap.data().stockDescontado : null;
         let cuerpo = { accion: 'devolver', pedido: pedidoId };
@@ -248,6 +264,8 @@
         .sp-talle{display:flex;align-items:center;gap:4px;min-width:0;padding:4px 4px 4px 10px;border-radius:10px;background:var(--neutral-bg,rgba(127,127,127,.12))}
         .sp-talle strong{flex:1;min-width:0}.sp-talle output{min-width:2ch;text-align:center;font-weight:700}
         .sp-talle button,.sp-nuevo button,.sp-btn{min-width:44px;min-height:44px;border:1px solid var(--border,rgba(127,127,127,.35));border-radius:10px;background:transparent;color:inherit;font:inherit;font-size:20px;cursor:pointer}
+        .sp button:disabled,.sp input:disabled{opacity:.4;cursor:not-allowed}
+        .sp-solo-ver{padding:10px 12px;border-radius:10px;background:var(--info-bg,rgba(2,132,199,.12))}
         .sp-cero{opacity:.6}.sp-nuevo{display:flex;gap:4px;min-width:0}.sp-nuevo input{flex:1;min-width:0;min-height:44px;padding:0 10px;border:1px dashed rgba(127,127,127,.6);border-radius:10px;background:transparent;color:inherit;font:inherit}
         .sp-nuevo button{font-size:15px;font-weight:600;padding:0 10px}
         @media (max-width:480px){.sp-talles{grid-template-columns:1fr}}
@@ -278,10 +296,10 @@
             <h2>Stock de casa</h2>
             <p>Sumá con + cuando te llegue y restá con − cuando vendas. Se guarda en el panel de la tienda y se ve en todas las tiendas. Al anotar un pedido de casa, el par se descuenta solo.</p>
             <p><a href="${PANEL}" target="_blank" rel="noopener">Abrir el panel</a> (fotos, precios y modelos nuevos)</p>
-            ${!EN_SITIO ? '<p><strong>Para cambiar el stock, abrí la app en mitiendastock.com/pedidos</strong></p>' : ''}
+            ${!EN_SITIO ? `<p class="sp-solo-ver"><strong>Estás viendo el stock en modo consulta.</strong> Para sumar, restar o agregar modelos abrí la app en <a href="${SITIO}/pedidos/" target="_blank" rel="noopener">mitiendastock.com/pedidos</a> (el panel solo acepta cambios desde ahí).</p>` : ''}
             <div class="sp-barra">
                 <input type="search" id="sp-buscar" placeholder="Nombre o marca" autocomplete="off" aria-label="Buscar modelo por nombre o marca">
-                <button type="button" id="sp-agregar" class="sp-primario">+ Agregar modelo</button>
+                <button type="button" id="sp-agregar" class="sp-primario"${EN_SITIO ? '' : ' disabled title="Solo se puede agregar desde mitiendastock.com/pedidos"'}>+ Agregar modelo</button>
             </div>
             <div id="sp-resultado" aria-live="polite"></div>
         </div>`;
@@ -307,12 +325,13 @@
         const pares = todas.reduce((s, [, m]) => s + totalDe(m), 0);
         const tarjetas = lista.map(([id, m]) => {
             const total = totalDe(m);
+            const desactivar = EN_SITIO ? '' : ' disabled';   // en GitHub el panel no acepta cambios
             const talles = Object.keys(m.talles).sort(ordenTalle).map(t => `
                     <div class="sp-talle${m.talles[t] > 0 ? '' : ' sp-cero'}">
                         <strong>${esc(t)}</strong>
-                        <button type="button" data-id="${esc(id)}" data-talle="${esc(t)}" data-delta="-1" aria-label="Restar uno al talle ${esc(t)} de ${esc(m.nombre)}">−</button>
+                        <button type="button" data-id="${esc(id)}" data-talle="${esc(t)}" data-delta="-1"${desactivar} aria-label="Restar uno al talle ${esc(t)} de ${esc(m.nombre)}">−</button>
                         <output>${m.talles[t]}</output>
-                        <button type="button" data-id="${esc(id)}" data-talle="${esc(t)}" data-delta="1" aria-label="Sumar uno al talle ${esc(t)} de ${esc(m.nombre)}">+</button>
+                        <button type="button" data-id="${esc(id)}" data-talle="${esc(t)}" data-delta="1"${desactivar} aria-label="Sumar uno al talle ${esc(t)} de ${esc(m.nombre)}">+</button>
                     </div>`).join('');
             const meta = [m.marca, m.etiqueta].filter(Boolean).join(' · ');
             return `<li class="sp-modelo">
@@ -321,7 +340,7 @@
                             <span class="sp-total ${total ? '' : 'sp-sin'}">${total ? plural(total) : 'Sin stock'}</span></div>
                     </div>
                     <div class="sp-talles">${talles}
-                        <form class="sp-nuevo" data-id="${esc(id)}"><input name="t" maxlength="12" placeholder="Talle" autocomplete="off" aria-label="Talle nuevo de ${esc(m.nombre)}"><button aria-label="Agregar talle">+ Talle</button></form>
+                        <form class="sp-nuevo" data-id="${esc(id)}"><input name="t" maxlength="12" placeholder="Talle" autocomplete="off"${desactivar} aria-label="Talle nuevo de ${esc(m.nombre)}"><button${desactivar} aria-label="Agregar talle">+ Talle</button></form>
                     </div></li>`;
         }).join('');
         cont.innerHTML = (todas.length ? `<p class="sp-resumen">${todas.length} ${todas.length === 1 ? 'modelo' : 'modelos'} · ${plural(pares)} en casa${q ? ` · ${lista.length} ${lista.length === 1 ? 'coincide' : 'coinciden'} con la búsqueda` : ''}</p>` : '')
@@ -382,6 +401,7 @@
     const MAX_FILAS = 40;
 
     function abrirAgregar() {
+        if (!EN_SITIO) return;   // desde GitHub el panel no acepta cambios (el botón ya está desactivado)
         const h = abrirHoja(`<h3>Agregar modelo al stock de casa</h3>
             <input type="search" id="sp-elegir-q" placeholder="Buscar por nombre o marca" autocomplete="off" aria-label="Buscar en todos los modelos de la tienda">
             <div id="sp-elegir"></div>
