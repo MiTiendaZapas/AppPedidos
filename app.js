@@ -160,6 +160,8 @@ function ventaDeLinea(p) {
 function gananciaDeLinea(p) {
     if (esFaltante(p)) return 0;
     if (p.pago === 'Cambio') return 0;   // el recargo es del proveedor: no deja ganancia
+    // Ganancia puesta a mano (ej. un modelo que no figura en las categorías): manda sobre el costo calculado.
+    if (typeof p.gananciaManual === 'number' && isFinite(p.gananciaManual)) return p.gananciaManual;
     const importe = parseFloat(p.importe) || 0;
     if (importe <= 0 || !precioConfig) return null;
     const costo = costoUnitarioDeModelo(precioConfig, p.modelo);
@@ -715,7 +717,23 @@ window.guardarEdicion = function (id, campo, elemento) {
         // Solo con tocar la celda y salir (sin cambiar nada) no se convierte en precio manual.
         if (n === (parseFloat(pedido.importe) || 0)) { elemento.innerText = n ? formatoPesos(n) : ''; return; }
         const cant = parseInt(pedido.cantidad) || 1;
-        Store.updatePedido(id, { precioUnitario: n / cant, importe: n, manualPrecio: true, categoria: 'Manual' });
+        // Si cambia el precio, la ganancia puesta a mano era del precio anterior: vuelve al cálculo automático.
+        Store.updatePedido(id, { precioUnitario: n / cant, importe: n, manualPrecio: true, categoria: 'Manual', gananciaManual: null });
+        return;
+    }
+
+    if (campo === 'ganancia') {
+        const limpio = nuevoValor.replace(/[\$¢\s]/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.');
+        if (limpio === '' || limpio === '-') { resetearGananciaManual(id); return; }
+        const n = parseFloat(limpio);
+        if (!isFinite(n)) {
+            alert('⚠️ Escribí la ganancia como un número (ej. 8000, o -3000 si perdés).');
+            elemento.innerText = formatoPesos(gananciaDeLinea(pedido) || 0);
+            return;
+        }
+        const actual = gananciaDeLinea(pedido);
+        if (actual !== null && n === actual) { elemento.innerText = formatoPesos(n); return; }
+        Store.updatePedido(id, { gananciaManual: n });
         return;
     }
 
@@ -725,7 +743,7 @@ window.guardarEdicion = function (id, campo, elemento) {
         const n = normalizarPrecioIngresado(escrito);
         if (n !== escrito) alert(`ℹ️ Escribiste ${escrito}: lo interpreté como ${formatoPesos(n)} (los precios van en pesos completos, no en miles).`);
         const nuevoImporte = importeDeLinea(n, pedido.cantidad);
-        Store.updatePedido(id, { precioUnitario: n, importe: nuevoImporte, manualPrecio: true, categoria: 'Manual' });
+        Store.updatePedido(id, { precioUnitario: n, importe: nuevoImporte, manualPrecio: true, categoria: 'Manual', gananciaManual: null });
         return;
     }
 
@@ -831,6 +849,10 @@ window.alternarEnvio = function (id) {
 window.resetearPrecioManual = function (id) {
     const p = pedidos.find(x => x.id === id); if (!p) return;
     Store.updatePedido(id, { manualPrecio: false }).then(() => recomputarPreciosCliente(p.cliente, []));
+};
+
+window.resetearGananciaManual = function (id) {
+    Store.updatePedido(id, { gananciaManual: null });
 };
 
 window.eliminarPedido = function (id) {
@@ -949,8 +971,12 @@ function lineaParaCierre(p) {
         cantidad: parseInt(p.cantidad) || 1,
         importe: parseFloat(p.importe) || 0,
         recargo: recargoDeLinea(p),
-        costoUnit: esCambio ? 0 : costoUnitarioDeModelo(precioConfig, p.modelo),
+        costoUnit: esCambio ? 0
+            : (typeof p.gananciaManual === 'number' && isFinite(p.gananciaManual)
+                ? ((parseFloat(p.importe) || 0) - p.gananciaManual) / (parseInt(p.cantidad) || 1)
+                : costoUnitarioDeModelo(precioConfig, p.modelo)),
         ganancia: g,
+        gananciaManual: typeof p.gananciaManual === 'number',
         envio: p.envio || '',
         pago: p.pago || '',
         cambio: esCambio,
@@ -1639,7 +1665,10 @@ function renderizarTabla() {
             </td>
             <td contenteditable="true" class="celda-editable columna-privada" onblur="guardarEdicion('${pedido.id}', 'pagoMonto', this)">${pagado > 0 ? formatoPesos(pagado) : (hayPago ? '$0' : '')}</td>
             <td class="celda-saldo columna-privada ${mostrarCalculo ? (saldo > 0 ? 'saldo-pendiente' : 'saldo-saldado') : ''}">${mostrarCalculo ? (saldo > 0 ? formatoPesos(saldo) : '✅ Saldado') : '—'}</td>
-            <td class="celda-ganancia columna-privada ${ganancia === null ? '' : (ganancia < 0 ? 'ganancia-negativa' : 'ganancia-positiva')}" ${ganancia === null && (parseFloat(pedido.importe) || 0) > 0 ? 'title="Falta cargar el costo de esta categoría (Configuración)"' : ''}>${ganancia === null ? '—' : formatoPesos(ganancia)}</td>
+            <td class="celda-ganancia columna-privada ${ganancia === null ? '' : (ganancia < 0 ? 'ganancia-negativa' : 'ganancia-positiva')}" >
+                <span contenteditable="true" class="celda-editable" title="${typeof pedido.gananciaManual === 'number' ? 'Ganancia puesta a mano' : (ganancia === null && (parseFloat(pedido.importe) || 0) > 0 ? 'Falta el costo de esta categoría: escribí la ganancia a mano' : 'Ganancia calculada con el costo de la categoría · tocá para cambiarla a mano')}" onblur="guardarEdicion('${pedido.id}', 'ganancia', this)">${ganancia === null ? '—' : formatoPesos(ganancia)}</span>
+                ${typeof pedido.gananciaManual === 'number' ? `<button class="btn-mini" title="Volver a la ganancia automática" onclick="resetearGananciaManual('${pedido.id}')">🔄</button>` : ''}
+            </td>
             <td class="columna-accion"><button onclick="eliminarPedido('${pedido.id}')" class="btn-eliminar">✕</button></td>
         `;
         listaBody.appendChild(fila);

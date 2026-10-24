@@ -54,8 +54,12 @@
         if (!(Number(t.expira) > Date.now())) { borrarToken(); sesionVencida = true; return null; }   // venció
         return t;
     }
-    // ¿Se puede cambiar el stock? En el sitio, sí (cookie del panel); en GitHub, solo con un token válido.
-    const puedeEditar = () => EN_SITIO || !!leerToken();
+    // GitHub SIN clave: la app intenta cambiar el stock sin pedir usuario ni clave. Si el servidor todavía
+    // los exige (responde 401 sin token), se marca acá y recién ahí se muestra el formulario de ingreso.
+    let servidorExigeClave = false;
+    // ¿Se puede cambiar el stock? En el sitio, sí (cookie del panel); en GitHub, sin clave mientras el
+    // servidor no la pida, y si la pide, solo con un token válido.
+    const puedeEditar = () => EN_SITIO || !!leerToken() || !servidorExigeClave;
 
     const norm = s => (typeof normalizarTexto === 'function' ? normalizarTexto(String(s || '')) : String(s || '').toLowerCase()).trim();
     const fmtTalle = t => String(t == null ? '' : t).trim().replace(',', '.').replace(/\s+/g, '');
@@ -184,21 +188,37 @@
         });
     }
 
-    // GitHub: el mismo pedido y la misma respuesta que /api/panel/casa, pero con el token. Sin cookies.
+    function errorSinClave(mensaje) { const e = new Error(mensaje); e.sinClave = true; return e; }
+
+    // GitHub: el mismo pedido y la misma respuesta que /api/panel/casa. Con token si hay uno; si no, sin
+    // Authorization (el servidor decide). Sin cookies.
     async function moverConToken(cuerpo) {
         const t = leerToken();
-        if (!t) throw new Error(sesionVencida ? 'Tu sesión venció, ingresá de nuevo.' : 'Ingresá en la pestaña Stock de casa para cambiar el stock.');
-        const r = await fetch(`${SITIO}/api/app/casa`, { method: 'POST', credentials: 'omit',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t.token}` }, body: JSON.stringify(cuerpo) });
+        if (!t && servidorExigeClave) throw errorSinClave(sesionVencida ? 'Tu sesión venció, ingresá de nuevo.' : 'Ingresá en la pestaña Stock de casa para cambiar el stock.');
+        const headers = { 'Content-Type': 'application/json' };
+        if (t) headers.Authorization = `Bearer ${t.token}`;
+        const r = await fetch(`${SITIO}/api/app/casa`, { method: 'POST', credentials: 'omit', headers, body: JSON.stringify(cuerpo) });
         const d = await r.json().catch(() => ({}));
+        if (r.status === 401 && !t) {   // el servidor todavía pide usuario y clave: se muestra el formulario
+            servidorExigeClave = true;
+            pintarPestana();
+            throw errorSinClave('Ingresá en la pestaña Stock de casa para cambiar el stock.');
+        }
         if (r.status === 401) {   // token vencido, o la clave se cambió: se vuelve al formulario
+            servidorExigeClave = true;
             borrarToken();
             sesionVencida = true;
             pintarPestana();
-            throw new Error('Tu sesión venció, ingresá de nuevo.');
+            throw errorSinClave('Tu sesión venció, ingresá de nuevo.');
         }
         if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
         return d;
+    }
+
+    // Como moverEnPanel, pero si el servidor exige clave y no hay sesión devuelve null (el pedido queda sin marcar).
+    async function moverOSinClave(cuerpo, aviso) {
+        try { return await moverEnPanel(cuerpo); }
+        catch (e) { if (e && e.sinClave) { avisarSinPanel(aviso); return null; } throw e; }
     }
 
     async function moverEnPanel(cuerpo, reintento) {
@@ -234,7 +254,9 @@
             return { ok: false, motivo: 'sin-panel' };
         }
         talle = String(talle).trim();
-        const r = await moverEnPanel({ accion: 'descontar', pedido: pedidoId, id: modeloId, talle });
+        const r = await moverOSinClave({ accion: 'descontar', pedido: pedidoId, id: modeloId, talle },
+            'ℹ️ Para descontar el stock de casa ingresá en la pestaña Stock de casa (o abrí la app en mitiendastock.com/pedidos).');
+        if (!r) return { ok: false, motivo: 'sin-panel' };
         if (r.ok || r.motivo === 'ya-descontado') {
             await Store.updatePedido(pedidoId, { stockDescontado: { id: r.id || modeloId, talle: r.talle || talle } });
         }
@@ -273,7 +295,9 @@
             }
             cuerpo = { ...cuerpo, legado: true, id: eq.id, talle: eq.talle };
         }
-        const r = await moverEnPanel(cuerpo);
+        const r = await moverOSinClave(cuerpo,
+            '⚠️ Ese pedido había descontado un par del stock de casa y no se pudo devolver: ingresá en la pestaña Stock de casa (o abrí la app en mitiendastock.com/pedidos).');
+        if (!r) return { ok: false, motivo: 'sin-panel' };
         if (sd) await Store.updatePedido(pedidoId, { stockDescontado: null });
         if (r.ok) leer();
         return r;
@@ -407,14 +431,15 @@
         const agregar = document.getElementById('sp-agregar');
         if (!vista || !zona) return;
         const t = EN_SITIO ? null : leerToken();   // leerToken puede marcar la sesión como vencida
-        const estado = EN_SITIO ? 'sitio' : (t ? 'con' : (sesionVencida ? 'sin-vencida' : 'sin'));
+        const libre = !EN_SITIO && !t && !servidorExigeClave;   // GitHub y el servidor no pide clave: sin formulario
+        const estado = EN_SITIO ? 'sitio' : (t ? 'con' : (libre ? 'libre' : (sesionVencida ? 'sin-vencida' : 'sin')));
         if (agregar) {
-            agregar.disabled = !(EN_SITIO || t);
+            agregar.disabled = !puedeEditar();
             agregar.title = agregar.disabled ? 'Ingresá con tu usuario del panel para agregar modelos' : '';
         }
         if (zona.dataset.estado === estado) return;
         zona.dataset.estado = estado;
-        if (estado === 'sitio') { zona.innerHTML = ''; return; }
+        if (estado === 'sitio' || estado === 'libre') { zona.innerHTML = ''; return; }
         if (t) {
             zona.innerHTML = `<div class="sp-sesion"><span>✅ Ingresaste${t.usuario ? ` como <strong>${esc(t.usuario)}</strong>` : ''}. Podés cambiar el stock.</span><button type="button" data-salir>Salir</button></div>`;
             return;
