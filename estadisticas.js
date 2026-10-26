@@ -73,11 +73,13 @@
         if (typeof c.ganancia === 'number') {
             ganancia = c.ganancia;
         } else {
-            // Cierre anterior al costo: se estima con los costos actuales.
+            // Cierre anterior al costo: se estima con los costos actuales... o, si después se subieron/bajaron
+            // todos los costos de una vez (Configuración), con la copia de los costos de ANTES, así no cambia.
             let costo = 0; sinCosto = 0; estimada = true;
+            const costosParaEstimar = (typeof precioConfig !== 'undefined' && precioConfig) ? (precioConfig.costosAnteriores || precioConfig) : null;
             Object.entries(modelos).forEach(([modelo, cant]) => {
                 const n = num(cant);
-                const cu = (typeof precioConfig !== 'undefined' && precioConfig) ? costoUnitarioDeModelo(precioConfig, modelo) : null;
+                const cu = costosParaEstimar ? costoUnitarioDeModelo(costosParaEstimar, modelo) : null;
                 if (cu === null) sinCosto += n; else costo += cu * n;
             });
             ganancia = fact - costo;

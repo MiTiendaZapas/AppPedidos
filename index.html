@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex, nofollow">
     <title>Sistema de Pedidos - Zapatillas</title>
-    <link rel="stylesheet" href="style.css?v=20261026b">
+    <link rel="stylesheet" href="style.css?v=20261026d">
 </head>
 <body>
 
@@ -289,6 +289,15 @@
                         <button id="btn-revisar-precios-tienda" type="button" class="btn btn-outline" onclick="revisarPreciosConTienda()">🔄 Revisar con la tienda</button>
                         <p class="ayuda">Los precios <strong>minorista y por mayor</strong> salen de las listas de la tienda, así los dos coinciden. Lo que cargues abajo en cada categoría sirve para el <strong>costo</strong> (ganancia), para saber si es ropa, y como respaldo si la tienda no se puede leer.</p>
                     </div>
+                    <div class="ayuda-categorias" id="caja-costos-masivo">
+                        <p class="ayuda"><strong>💲 Subir o bajar todos los costos</strong> — si tu proveedor sube (o baja) cada par, escribí cuánto y se suma al "costo por par" de todas las categorías y de "modelos sin categoría".</p>
+                        <div class="costos-masivo-fila">
+                            <input type="text" id="input-monto-costos" inputmode="numeric" placeholder="+1000 o -1000" autocomplete="off">
+                            <button id="btn-ver-costos" type="button" class="btn btn-outline" onclick="verCambioDeCostos()">Ver cómo queda</button>
+                        </div>
+                        <p class="ayuda" id="estado-costos-ajuste"></p>
+                        <div id="vista-previa-costos" style="display:none;"></div>
+                    </div>
                     <div class="ayuda-categorias">
                         <p class="ayuda">Cada <strong>categoría</strong> es un modelo o grupo de modelos (ej: "Jordan low pink"). Si el modelo que cargás contiene alguna de sus <strong>palabras clave</strong>, se le aplica ese precio — no hace falta ordenar nada: si coincide con varias categorías, gana sola la más específica (la de la palabra más larga).</p>
                     </div>
@@ -353,8 +362,8 @@
     <script src="pricing.js?v=20261026a"></script>
     <script src="precios-tienda.js?v=20261026b"></script>
     <script src="store.js?v=20261016a"></script>
-    <script src="app.js?v=20261026c"></script>
-    <script src="estadisticas.js?v=20261016a"></script>
+    <script src="app.js?v=20261026d"></script>
+    <script src="estadisticas.js?v=20261026a"></script>
     <script src="stock.js?v=20261025a"></script>
     <script src="stock-panel.js?v=20261025b"></script>
 </body>

@@ -2093,8 +2093,133 @@ async function revisarPreciosConTienda() {
     setTimeout(actualizarAvisoPreciosTienda, 1500);
 }
 
+// ---- SUBIR O BAJAR TODOS LOS COSTOS ----------------------------------------
+// El proveedor sube (o baja) cada par: se suma un monto fijo al "costo por par" de todas las categorías y al
+// de "modelos sin categoría". Un costo vacío se toma de la tabla sugerida (COSTO_POR_PRECIO_MAYOR), se le suma
+// el monto y queda guardado como número fijo (así no vuelve a usar la tabla vieja, que no sabe del aumento).
+// Ganancia de lo ya hecho: los cierres que guardaron su ganancia no cambian nunca; los pocos cierres viejos que
+// no la guardaron se estiman con una copia de los costos de ANTES (precioConfig.costosAnteriores, ver estadisticas.js).
+// Los pedidos abiertos de las listas toman el costo nuevo.
+function costoEfectivoDeCategoria(cat) {
+    return typeof cat.costo === 'number' ? cat.costo : costoSugerido(cat.precios);
+}
+function costoEfectivoDefault(config) {
+    return typeof config.costoDefault === 'number' ? config.costoDefault : costoSugerido(config.defaultPrecios);
+}
+
+// "+1000", "-1000", "1.000", "$ 2000" -> número entero (o null si no se entiende / es 0).
+function leerMontoDeCostos(texto) {
+    const t = String(texto || '').trim();
+    const digitos = t.replace(/[^\d]/g, '');
+    if (!digitos) return null;
+    const n = parseInt(digitos, 10) * (t.includes('-') ? -1 : 1);
+    return n === 0 ? null : n;
+}
+
+function planAjusteCostos(monto) {
+    const nuevo = antes => (typeof antes === 'number' ? Math.max(0, antes + monto) : null);
+    const filas = precioConfig.categorias.map(cat => {
+        const antes = costoEfectivoDeCategoria(cat);
+        return { nombre: cat.etiqueta, antes, despues: nuevo(antes), sugerido: typeof cat.costo !== 'number' && typeof antes === 'number' };
+    });
+    const antesDefault = costoEfectivoDefault(precioConfig);
+    filas.push({ nombre: 'Modelos sin categoría', antes: antesDefault, despues: nuevo(antesDefault), sugerido: typeof precioConfig.costoDefault !== 'number' && typeof antesDefault === 'number', esDefault: true });
+    return filas;
+}
+
+function cerrarVistaPreviaCostos() {
+    const cont = document.getElementById('vista-previa-costos');
+    if (cont) { cont.style.display = 'none'; cont.innerHTML = ''; }
+}
+
+function verCambioDeCostos() {
+    const cont = document.getElementById('vista-previa-costos');
+    if (!cont || !precioConfig) return;
+    const monto = leerMontoDeCostos(document.getElementById('input-monto-costos').value);
+    if (monto === null) { alert('Escribí cuánto sube o baja cada par. Ej: +1000 (sube $1.000) o -1000 (baja $1.000).'); return; }
+    if (Math.abs(monto) > 100000) { alert('Ese monto parece demasiado grande. Revisalo.'); return; }
+    const filas = planAjusteCostos(monto);
+    const pesos = n => (typeof n === 'number' ? formatoPesos(n) : '—');
+    const cambian = filas.filter(f => f.despues !== null).length;
+    const sinCosto = filas.filter(f => f.despues === null);
+    const signo = monto > 0 ? '+' : '−';
+    cont.style.display = '';
+    cont.innerHTML = `
+        <p class="ayuda"><strong>${monto > 0 ? 'Sube' : 'Baja'} ${formatoPesos(Math.abs(monto))} el costo por par</strong> en ${cambian} ${cambian === 1 ? 'categoría' : 'categorías'}. Así queda (nada se guardó todavía):</p>
+        <table>
+            <thead><tr><th>Categoría</th><th class="num">Antes</th><th class="num">Nuevo costo</th></tr></thead>
+            <tbody>${filas.map(f => `<tr>
+                <td>${escaparHtmlCostos(f.nombre)}${f.sugerido ? ' <small title="Estaba vacío: se tomó el costo sugerido y queda fijo">(estaba vacío → queda fijo)</small>' : ''}</td>
+                <td class="num">${pesos(f.antes)}</td>
+                <td class="num"><strong>${f.despues === null ? 'sin costo' : pesos(f.despues)}</strong></td>
+            </tr>`).join('')}</tbody>
+        </table>
+        ${sinCosto.length ? `<p class="ayuda">${sinCosto.length} sin costo cargado no se tocan (${sinCosto.map(f => escaparHtmlCostos(f.nombre)).join(', ')}).</p>` : ''}
+        <p class="ayuda">Los pedidos de las listas abiertas toman el costo nuevo. Los cierres ya hechos no cambian (los viejos que no guardaron su ganancia siguen con los costos de antes).</p>
+        <div class="costos-botones">
+            <button type="button" class="btn btn-exito" id="btn-confirmar-costos" onclick="confirmarCambioDeCostos(${monto})">✅ Confirmar y guardar (${signo}${formatoPesos(Math.abs(monto))})</button>
+            <button type="button" class="btn btn-outline" onclick="cerrarVistaPreviaCostos()">Cancelar</button>
+        </div>`;
+}
+
+function escaparHtmlCostos(t) {
+    return String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function confirmarCambioDeCostos(monto) {
+    if (!precioConfig || !Number.isFinite(monto) || monto === 0) return;
+    const btn = document.getElementById('btn-confirmar-costos');
+    if (btn) btn.disabled = true;   // un solo clic: dos clics sumarían el monto dos veces
+    const plan = planAjusteCostos(monto);   // se vuelve a calcular con lo guardado ahora mismo
+    // 1) copia de los costos de ANTES (una sola vez: la primera) para los cierres viejos sin ganancia guardada
+    if (!precioConfig.costosAnteriores) {
+        precioConfig.costosAnteriores = {
+            fecha: new Date().toISOString().slice(0, 10),
+            categorias: precioConfig.categorias.map(c => ({ ...JSON.parse(JSON.stringify(c)), costo: costoEfectivoDeCategoria(c) })),
+            defaultPrecios: { ...precioConfig.defaultPrecios },
+            costoDefault: costoEfectivoDefault(precioConfig),
+        };
+    }
+    // 2) costos nuevos, como números fijos
+    const idsCambiados = {};
+    precioConfig.categorias.forEach((cat, i) => {
+        if (plan[i].despues !== null) { cat.costo = plan[i].despues; if (cat.id) idsCambiados[cat.id] = plan[i].despues; }
+    });
+    const filaDefault = plan[plan.length - 1];
+    if (filaDefault.despues !== null) precioConfig.costoDefault = filaDefault.despues;
+    precioConfig.ultimoAjusteCostos = { fecha: new Date().toISOString().slice(0, 10), monto };
+    Store.setConfig(precioConfig).then(() => {
+        // lo que ya se editó (sin guardar) en la pantalla de categorías se respeta: solo se pisa el costo
+        if (configDraft) {
+            configDraft.categorias.forEach(cat => { if (cat.id && cat.id in idsCambiados) cat.costo = idsCambiados[cat.id]; });
+            if (filaDefault.despues !== null) configDraft.costoDefault = filaDefault.despues;
+            configDraft.ultimoAjusteCostos = precioConfig.ultimoAjusteCostos;
+            configDraft.costosAnteriores = precioConfig.costosAnteriores;
+        }
+        document.getElementById('input-monto-costos').value = '';
+        cerrarVistaPreviaCostos();
+        renderizarConfigUI();
+        renderizarTabla();
+        alert(`✅ Listo: los costos ${monto > 0 ? 'subieron' : 'bajaron'} ${formatoPesos(Math.abs(monto))} por par. Las ganancias de la lista ya usan el costo nuevo.`);
+    }).catch(err => {
+        console.error(err);
+        if (btn) btn.disabled = false;
+        alert('No se pudo guardar el cambio de costos. Probá de nuevo.');
+    });
+}
+
+function pintarUltimoAjusteDeCostos() {
+    const el = document.getElementById('estado-costos-ajuste');
+    if (!el) return;
+    const u = precioConfig && precioConfig.ultimoAjusteCostos;
+    if (!u) { el.textContent = ''; return; }
+    const [a, m, d] = String(u.fecha).split('-');
+    el.textContent = `Último cambio de costos: ${u.monto > 0 ? '+' : '−'}${formatoPesos(Math.abs(u.monto))} (${d}/${m}/${a}).`;
+}
+
 function renderizarConfigUI() {
     if (!configDraft) return;
+    pintarUltimoAjusteDeCostos();
     pintarPreciosTienda();
     renderizarListaCategorias();
     document.getElementById('input-recargo-cambio').value = configDraft.recargoCambio;
@@ -2331,7 +2456,9 @@ document.getElementById('btn-guardar-general').addEventListener('click', () => {
 
 document.getElementById('btn-restablecer-precios').addEventListener('click', () => {
     if (!confirm('Esto reemplaza TODAS las categorías y precios actuales por los valores por defecto. ¿Continuar?')) return;
+    const costosAnteriores = precioConfig.costosAnteriores;   // protege la ganancia de los cierres viejos
     precioConfig = configPreciosPorDefecto();
+    if (costosAnteriores) precioConfig.costosAnteriores = costosAnteriores;
     configDraft = JSON.parse(JSON.stringify(precioConfig));
     Store.setConfig(precioConfig).then(() => {
         renderizarConfigUI();
