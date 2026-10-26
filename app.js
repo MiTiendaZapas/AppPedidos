@@ -2028,8 +2028,59 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     });
 });
 
+// ---- PRECIOS DE LA TIENDA ---------------------------------------------------
+// Líneas de la lista actual cuyo precio automático difiere del que hoy da la tienda. Las de precio
+// manual, los cambios de talle y los pares que no se trajeron no se tocan.
+function diferenciasConTienda() {
+    const difs = [];
+    if (!precioConfig || typeof PreciosTienda === 'undefined' || !PreciosTienda.listo()) return difs;
+    const porCliente = {};
+    pedidos.forEach(p => { (porCliente[(p.cliente || '').trim().toLowerCase()] = porCliente[(p.cliente || '').trim().toLowerCase()] || []).push(p); });
+    Object.values(porCliente).forEach(delCliente => {
+        const todas = delCliente.map(p => ({ modelo: p.modelo, cantidad: p.cantidad }));
+        delCliente.forEach(p => {
+            if (p.manualPrecio || p.pago === 'Cambio' || esFaltante(p)) return;
+            const r = calcularParaLinea(p.cliente, p.modelo, todas);
+            const despues = importeDeLinea(r.precio, p.cantidad);
+            const antes = parseFloat(p.importe) || 0;
+            if (despues !== antes) difs.push({ cliente: p.cliente, modelo: p.modelo, antes, despues });
+        });
+    });
+    return difs;
+}
+
+function pintarPreciosTienda() {
+    const cont = document.getElementById('estado-precios-tienda');
+    if (!cont || typeof PreciosTienda === 'undefined') return;
+    const i = PreciosTienda.info();
+    if (!PreciosTienda.listo()) {
+        cont.innerHTML = `⚠️ <strong>No se pudieron leer los precios de la tienda</strong>${i.error ? ` (${i.error})` : ''}. Mientras tanto la app usa las categorías de esta pantalla.`;
+        return;
+    }
+    const hora = i.actualizadoEl ? new Date(i.actualizadoEl).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    const cant = diferenciasConTienda().length;
+    cont.innerHTML = `✅ <strong>Los precios (minorista y por mayor) se toman de la tienda</strong> · leídos ${hora}${i.error ? ' · ⚠️ no se pudo actualizar ahora, se usa la última copia' : ''}`
+        + (cant ? `<br>⚠️ <strong>${cant}</strong> ${cant === 1 ? 'línea de la lista tiene' : 'líneas de la lista tienen'} un precio distinto al de la tienda.` : '<br>Todas las líneas de la lista coinciden con la tienda.');
+}
+
+async function revisarPreciosConTienda() {
+    if (typeof PreciosTienda === 'undefined') return;
+    await PreciosTienda.actualizar();
+    pintarPreciosTienda();
+    const difs = diferenciasConTienda();
+    if (!PreciosTienda.listo()) { alert('No se pudieron leer los precios de la tienda. Probá de nuevo en un rato.'); return; }
+    if (!difs.length) { alert('✅ Todos los precios de la lista coinciden con la tienda.'); return; }
+    const detalle = difs.slice(0, 15).map(d => `• ${d.cliente} – ${d.modelo}: ${formatoPesos(d.antes)} → ${formatoPesos(d.despues)}`).join('\n');
+    const ok = confirm(`Estas ${difs.length} líneas tienen un precio distinto al de la tienda:\n\n${detalle}${difs.length > 15 ? `\n… y ${difs.length - 15} más` : ''}\n\n¿Cambiarlas al precio de la tienda? (Los precios puestos a mano y los cierres ya hechos no se tocan.)`);
+    if (!ok) return;
+    const clientes = [...new Set(difs.map(d => d.cliente))];
+    clientes.forEach(c => recomputarPreciosCliente(c, []));
+    setTimeout(pintarPreciosTienda, 1500);
+}
+
 function renderizarConfigUI() {
     if (!configDraft) return;
+    pintarPreciosTienda();
     renderizarListaCategorias();
     document.getElementById('input-recargo-cambio').value = configDraft.recargoCambio;
     document.getElementById('input-default-minorista-unidad').value = configDraft.defaultPrecios.minoristaUnidad;
@@ -2421,6 +2472,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             renderizarTabsListas();
         });
+
+        // Precios de la tienda (precios-tienda.js): se leen al abrir y cada tanto. No se reescribe ningún pedido
+        // solo: lo que cambió se ve en Configuración → "Revisar con la tienda" y se aplica cuando vos decís.
+        if (typeof PreciosTienda !== 'undefined') {
+            PreciosTienda.alCambiar(() => { pintarPreciosTienda(); renderizarTabla(); });
+            PreciosTienda.iniciar();
+        }
 
         let yaSeSembroConfigPorDefecto = false; // evita reintentar sembrar en bucle si algo sale mal
         let yaSeMigroCostos = false; // evita reintentar el guardado en bucle

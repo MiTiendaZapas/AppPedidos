@@ -303,6 +303,15 @@ function calcularPrecioUnitario(config, tabla, modelo, totalParesCliente, cantid
     const nivel = (tipo !== 'ropa' && totalParesCliente >= 5) ? 'Mayor' : 'Unidad';
     const clave = clavePrecio(tabla, nivel);
 
+    // Los precios los maneja la tienda (precios-tienda.js): se usa su misma lógica. La categoría de la app
+    // queda para el costo/ganancia y para saber si es ropa. Sin las reglas de la tienda se usa lo de abajo.
+    if (typeof PreciosTienda !== 'undefined' && PreciosTienda.listo()) {
+        const t = PreciosTienda.calcular(tabla, modelo, nivel, cantidadMismoModeloCliente, tipo);
+        if (t) {
+            return { precio: t.precio, categoria: cat ? cat.etiqueta : 'Todo lo demás (default)', tipo, nivel: nivel.toLowerCase(), origen: 'tienda' };
+        }
+    }
+
     let precio, categoria;
     if (cat) {
         precio = cat.precios[clave];
