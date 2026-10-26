@@ -516,6 +516,7 @@ tbody tr.fila-dep-faltante td:not(.columna-deposito):not(.columna-accion) { text
 .menu-deposito button { text-align: left; padding: 11px 12px; border: none; background: none; border-radius: var(--radius-sm); font: inherit; font-size: 14px; font-weight: 600; color: var(--text); cursor: pointer; }
 .menu-deposito button:hover { background: var(--primary-bg); }
 
+.aviso-precios-tienda { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 10px 16px; font-size: 13px; background: var(--warning-bg, #fff7e0); border-bottom: 1px solid var(--border); }
 .progreso-deposito { padding: 10px 16px 12px; border-bottom: 1px solid var(--border); }
 .progreso-deposito-texto { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 13px; margin-bottom: 7px; }
 .dep-etq { font-size: 12px; font-weight: 700; color: var(--text-muted); }

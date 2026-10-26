@@ -1675,6 +1675,7 @@ function renderizarTabla() {
     });
 
     actualizarProgresoDeposito();
+    actualizarAvisoPreciosTienda();
     actualizarResumen();
     actualizarEnvios();
     actualizarDireccionesPendientes();
@@ -2063,6 +2064,19 @@ function pintarPreciosTienda() {
         + (cant ? `<br>⚠️ <strong>${cant}</strong> ${cant === 1 ? 'línea de la lista tiene' : 'líneas de la lista tienen'} un precio distinto al de la tienda.` : '<br>Todas las líneas de la lista coinciden con la tienda.');
 }
 
+// Aviso arriba de la lista: los pedidos ya cargados guardan el precio con el que se anotaron y NO cambian solos
+// cuando cambia la tienda. Si alguna línea quedó distinta, se avisa acá con un botón para ponerla al día.
+function actualizarAvisoPreciosTienda() {
+    const el = document.getElementById('aviso-precios-tienda');
+    if (!el) return;
+    const difs = diferenciasConTienda();
+    pintarPreciosTienda();
+    if (!difs.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    el.style.display = '';
+    el.innerHTML = `<span>⚠️ <strong>${difs.length}</strong> ${difs.length === 1 ? 'línea tiene' : 'líneas tienen'} un precio distinto al de la tienda (se anotaron con el precio de antes).</span>
+        <button type="button" class="btn btn-outline" onclick="revisarPreciosConTienda()">🔄 Ver y actualizar</button>`;
+}
+
 async function revisarPreciosConTienda() {
     if (typeof PreciosTienda === 'undefined') return;
     await PreciosTienda.actualizar();
@@ -2075,7 +2089,7 @@ async function revisarPreciosConTienda() {
     if (!ok) return;
     const clientes = [...new Set(difs.map(d => d.cliente))];
     clientes.forEach(c => recomputarPreciosCliente(c, []));
-    setTimeout(pintarPreciosTienda, 1500);
+    setTimeout(actualizarAvisoPreciosTienda, 1500);
 }
 
 function renderizarConfigUI() {
