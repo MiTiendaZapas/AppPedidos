@@ -2061,6 +2061,7 @@ function pintarPreciosTienda() {
     const hora = i.actualizadoEl ? new Date(i.actualizadoEl).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
     const cant = diferenciasConTienda().length;
     cont.innerHTML = `✅ <strong>Los precios (minorista y por mayor) se toman de la tienda</strong> · leídos ${hora}${i.error ? ' · ⚠️ no se pudo actualizar ahora, se usa la última copia' : ''}`
+        + (i.ajustes === 'no' ? '<br>⚠️ <strong>No se pudo leer "Cambiar precios" de la tienda</strong> (lo que se sube o baja a toda la lista): los precios pueden salir distintos a los de la tienda hasta que se pueda leer.' : '')
         + (cant ? `<br>⚠️ <strong>${cant}</strong> ${cant === 1 ? 'línea de la lista tiene' : 'líneas de la lista tienen'} un precio distinto al de la tienda.` : '<br>Todas las líneas de la lista coinciden con la tienda.');
 }
 

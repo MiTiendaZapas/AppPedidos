@@ -19,6 +19,17 @@ const PreciosTienda = (function () {
     const BASE = 'https://mitiendazapas.github.io/';
     const ARCHIVOS = { minorista: BASE + 'precios-minorista.json', mayorista: BASE + 'precios-mayorista.json' };
     const URL_CATALOGO = 'https://mitiendastock.com/api/tienda/laimp/productos.json';
+    // "Cambiar precios" del panel: sube/baja TODA la lista (en % y/o en pesos) y no está en los JSON de reglas.
+    const URL_AJUSTES = 'https://mitiendastock.com/api/tienda/laimp/ajustes.json';
+    const CELDAS_AJUSTE = {
+        'publico:br': ['brPercent', 'brAmount'], 'mayorista:br': ['resalePercent', 'resaleAmount'],
+        'publico:g5': ['g5Percent', 'g5Amount'], 'mayorista:g5': ['g5ResalePercent', 'g5ResaleAmount'],
+    };
+    const CADENA_AJUSTE = {   // misma cascada que motor/js/ajuste-lista.js
+        'publico:br': ['publico:br'], 'mayorista:br': ['mayorista:br', 'publico:br'],
+        'publico:g5': ['publico:g5', 'publico:br'],
+        'mayorista:g5': ['mayorista:g5', 'mayorista:br', 'publico:g5', 'publico:br'],
+    };
     const CLAVE = 'preciosTienda:v1';
     const REFRESCO_MS = 5 * 60 * 1000;
 
@@ -59,16 +70,31 @@ const PreciosTienda = (function () {
     }
     const buscar = (lista, clave, corta, categoria) => lista.reglas.find(r => coincide(r, clave, corta, categoria)) || null;
 
-    function compilarTabla(t) {
+    // { percent, amount } de "Cambiar precios" para una versión ('publico'|'mayorista') y calidad ('br'|'g5').
+    function ajusteDe(ajustes, version, calidad) {
+        for (const clave of CADENA_AJUSTE[version + ':' + calidad]) {
+            const [kp, ka] = CELDAS_AJUSTE[clave];
+            if (ajustes && (ajustes[kp] != null || ajustes[ka] != null)) {
+                return { percent: Number(ajustes[kp]) || 0, amount: Number(ajustes[ka]) || 0 };
+            }
+        }
+        return { percent: 0, amount: 0 };
+    }
+
+    function compilarTabla(t, ajustes, version) {
         const ajuste = o => ({ percent: Number(o && o.percent) || 0, amount: Number(o && o.amount) || 0 });
-        const br = ajuste(t);
+        const ajBr = ajusteDe(ajustes, version, 'br');
+        const ajG5 = ajusteDe(ajustes, version, 'g5');
+        // Igual que adjustedTable de la tienda: si hay algún ajuste en el panel, manda; si no, queda lo del JSON.
+        const hayAjuste = ajBr.percent || ajBr.amount || ajG5.percent || ajG5.amount;
+        const br = hayAjuste ? ajBr : ajuste(t);
         return {
             unit: compilarLista(t.unit),
             mayor: compilarLista(t.wholesalePrice),
             overrides: t.overrides || {},
             conMayor: t.wholesale !== false,
             br,
-            g5: t.g5Adjust ? ajuste(t.g5Adjust) : br,
+            g5: hayAjuste ? ajG5 : (t.g5Adjust ? ajuste(t.g5Adjust) : br),
         };
     }
 
@@ -80,8 +106,8 @@ const PreciosTienda = (function () {
             if (p.brand) marcas.add(pk(p.brand));
         });
         compilado = {
-            minorista: compilarTabla(datos.minorista),
-            mayorista: compilarTabla(datos.mayorista),
+            minorista: compilarTabla(datos.minorista, datos.ajustes, 'publico'),
+            mayorista: compilarTabla(datos.mayorista, datos.ajustes, 'mayorista'),
             porNombre,
             marcas: [...marcas].sort((a, b) => b.length - a.length),
         };
@@ -183,19 +209,22 @@ const PreciosTienda = (function () {
 
     async function actualizar() {
         try {
-            const [minorista, mayorista, catalogoBruto] = await Promise.all([
+            const [minorista, mayorista, catalogoBruto, ajustesBruto] = await Promise.all([
                 pedirJson(ARCHIVOS.minorista), pedirJson(ARCHIVOS.mayorista),
                 pedirJson(URL_CATALOGO).catch(() => null),   // sin catálogo igual se calculan las reglas
+                pedirJson(URL_AJUSTES).catch(() => null),
             ]);
             const anterior = leerCopia();
             const datos = {
                 minorista, mayorista,
                 catalogo: catalogoBruto ? compactarCatalogo(catalogoBruto) : ((anterior && anterior.catalogo) || []),
+                ajustes: ajustesBruto || ((anterior && anterior.ajustes) || null),
                 actualizadoEl: Date.now(),
             };
-            const firma = JSON.stringify([datos.minorista, datos.mayorista, datos.catalogo]);
+            const firma = JSON.stringify([datos.minorista, datos.mayorista, datos.catalogo, datos.ajustes]);
             compilar(datos);
-            info = { actualizadoEl: datos.actualizadoEl, desdeCopia: false, error: null };
+            info = { actualizadoEl: datos.actualizadoEl, desdeCopia: false, error: null,
+                ajustes: ajustesBruto ? 'ok' : (datos.ajustes ? 'copia' : 'no') };
             guardarCopia(datos);
             if (firma !== ultimoJson) { ultimoJson = firma; avisar(); }
             else avisar(true);
@@ -216,8 +245,8 @@ const PreciosTienda = (function () {
         if (copia) {
             try {
                 compilar(copia);
-                info = { actualizadoEl: copia.actualizadoEl || 0, desdeCopia: true, error: null };
-                ultimoJson = JSON.stringify([copia.minorista, copia.mayorista, copia.catalogo]);
+                info = { actualizadoEl: copia.actualizadoEl || 0, desdeCopia: true, error: null, ajustes: copia.ajustes ? 'copia' : 'no' };
+                ultimoJson = JSON.stringify([copia.minorista, copia.mayorista, copia.catalogo, copia.ajustes]);
             } catch (e) { compilado = null; }
         }
         actualizar();
