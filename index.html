@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex, nofollow">
     <title>Sistema de Pedidos - Zapatillas</title>
-    <link rel="stylesheet" href="style.css?v=20261026d">
+    <link rel="stylesheet" href="style.css?v=20261102a">
 </head>
 <body>
 
@@ -279,6 +279,7 @@
             <div class="tabs-config">
                 <button class="tab-btn activo" data-tab="tab-categorias">Categorías y precios</button>
                 <button class="tab-btn" data-tab="tab-general">General</button>
+                <button class="tab-btn" data-tab="tab-direcciones">Direcciones</button>
                 <button class="tab-btn" data-tab="tab-clientes">Clientes</button>
             </div>
 
@@ -342,6 +343,16 @@
                     <button id="btn-restablecer-precios" class="btn btn-outline btn-peligro">Restablecer todos los precios a los valores por defecto</button>
                 </div>
 
+                <div id="tab-direcciones" class="tab-contenido">
+                    <p class="ayuda">Acá están las direcciones que la app <strong>recuerda</strong> de cada cliente: son las que se cargan solas cuando elegís Via o Moto. Si una está mal, corregila y tocá <strong>Guardar</strong>: se cambia en lo recordado y en los pedidos Via/Moto de todas las listas abiertas (los cierres ya hechos no se tocan).</p>
+                    <div class="dir-filtros">
+                        <input type="search" id="buscar-direcciones" placeholder="🔎 Buscar por nombre o dirección...">
+                        <label class="dir-solo-revisar"><input type="checkbox" id="solo-revisar-direcciones"> Solo las que hay que revisar</label>
+                    </div>
+                    <p class="ayuda" id="resumen-direcciones-guardadas"></p>
+                    <div id="lista-direcciones-guardadas"></div>
+                </div>
+
                 <div id="tab-clientes" class="tab-contenido">
                     <p class="ayuda">Esta es tu lista de revendedores (grupo, precio mayorista) — se arma sola cuando tildás "Es del grupo" al cargar un pedido, así se recuerda la próxima vez. Los clientes minoristas comunes no se guardan acá. Podés editar el nombre o sacar a alguien de la lista.</p>
                     <div id="lista-clientes-config"></div>
@@ -361,8 +372,8 @@
     <script src="firebase-config.js?v=20261016a"></script>
     <script src="pricing.js?v=20261026a"></script>
     <script src="precios-tienda.js?v=20261026b"></script>
-    <script src="store.js?v=20261016a"></script>
-    <script src="app.js?v=20261026d"></script>
+    <script src="store.js?v=20261102a"></script>
+    <script src="app.js?v=20261102b"></script>
     <script src="estadisticas.js?v=20261026a"></script>
     <script src="stock.js?v=20261025a"></script>
     <script src="stock-panel.js?v=20261025b"></script>

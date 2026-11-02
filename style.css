@@ -516,6 +516,16 @@ tbody tr.fila-dep-faltante td:not(.columna-deposito):not(.columna-accion) { text
 .menu-deposito button { text-align: left; padding: 11px 12px; border: none; background: none; border-radius: var(--radius-sm); font: inherit; font-size: 14px; font-weight: 600; color: var(--text); cursor: pointer; }
 .menu-deposito button:hover { background: var(--primary-bg); }
 
+.dir-filtros { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 8px 0; }
+.dir-filtros input[type="search"] { flex: 1 1 200px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; font-size: 15px; }
+.dir-solo-revisar { font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.dir-guardada { border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+.dir-guardada.dir-revisar { border-color: #e0a800; background: var(--warning-bg, #fff7e0); }
+.dir-guardada-cab { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.dir-etq { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--neutral-bg); }
+.dir-aviso { font-size: 12px; margin-bottom: 6px; }
+.dir-guardada textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; font-size: 14px; }
+.dir-botones { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .costos-masivo-fila { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
 .costos-masivo-fila input { width: 150px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; font-size: 15px; }
 #vista-previa-costos table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0; }

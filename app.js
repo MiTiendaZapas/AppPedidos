@@ -1433,16 +1433,96 @@ function actualizarDireccionesPendientes() {
 function guardarDireccionPendiente(nombreCliente, direccionCruda) {
     const direccion = (direccionCruda || '').trim();
     const key = (nombreCliente || '').trim().toLowerCase();
-    const pedidosDelCliente = pedidos.filter(p =>
-        (p.cliente || '').trim().toLowerCase() === key &&
-        (p.envio === 'Via' || p.envio === 'Moto')
+    const lineas = todosPedidos.filter(p =>
+        (p.cliente || '').trim().toLowerCase() === key && esViaOMoto(p.envio)
     );
-    Promise.all(
-        pedidosDelCliente
-            .filter(p => (p.direccion || '') !== direccion)
-            .map(p => Store.updatePedido(p.id, { direccion }))
-    );
+    if (!lineas.length) return Promise.resolve();
+    return corregirDireccionDeCliente(lineas[0].cliente.trim(), lineas[0].envio, direccion);
 }
+
+// Corrige la dirección de un cliente en TODOS los lugares donde vive: lo recordado para autocompletar al
+// elegir Via/Moto y las líneas Via/Moto de todas las listas abiertas. (Antes solo se tocaban las líneas de la
+// lista que se estaba viendo, y la dirección recordada seguía siendo la vieja.) Los cierres no se tocan.
+function corregirDireccionDeCliente(nombre, envio, direccion) {
+    const id = Store.normalizarIdCliente(nombre);
+    const lineas = todosPedidos
+        .filter(p => Store.normalizarIdCliente(p.cliente || '') === id && esViaOMoto(p.envio) && (p.direccion || '') !== direccion);
+    const guardado = enviosClientesCache[id];
+    const recordadoIgual = guardado && guardado.envio === envio && (guardado.direccion || '') === direccion;
+    if (!lineas.length && recordadoIgual) return Promise.resolve();   // nada cambió: no se escribe
+    enviosClientesCache[id] = { ...(guardado || {}), nombre, envio, direccion };   // optimista
+    const promesas = [];
+    if (!recordadoIgual && typeof Store.setEnvioCliente === 'function') promesas.push(Store.setEnvioCliente(nombre, { envio, direccion }));
+    lineas.forEach(p => promesas.push(Store.updatePedido(p.id, { direccion })));
+    return Promise.all(promesas);
+}
+
+// ---- DIRECCIONES GUARDADAS (Configuración → Direcciones) --------------------
+// Todo lo que la app recuerda de cada cliente con Via/Moto, para corregirlo o borrarlo (no solo los de la lista de hoy).
+function motivoDeRevisionDeDireccion(e) {
+    const d = (e.direccion || '').trim();
+    if (!d) return 'Sin dirección cargada';
+    // El mensaje con que se piden los datos, sin completar (si trae un DNI/teléfono, ya tiene los datos del cliente).
+    if (/necesitar[ií]a estos datos|me pas[aá]s (estos )?datos/i.test(d) && !/\d[\d.\s]{5,}\d/.test(d)) return 'Parece el mensaje pidiendo los datos, sin completar';
+    return '';
+}
+
+function renderizarDireccionesGuardadas() {
+    const cont = document.getElementById('lista-direcciones-guardadas');
+    if (!cont) return;
+    if (cont.contains(document.activeElement) && document.activeElement.tagName === 'TEXTAREA') return;   // no pisar lo que se está escribiendo
+    const texto = ((document.getElementById('buscar-direcciones') || {}).value || '').trim().toLowerCase();
+    const soloRevisar = !!(document.getElementById('solo-revisar-direcciones') || {}).checked;
+    const todas = Object.entries(enviosClientesCache).map(([id, e]) => ({ id, ...e, motivo: motivoDeRevisionDeDireccion(e) }));
+    const porRevisar = todas.filter(e => e.motivo).length;
+    const info = document.getElementById('resumen-direcciones-guardadas');
+    if (info) info.textContent = `${todas.length} clientes con envío recordado${porRevisar ? ` · ⚠️ ${porRevisar} para revisar` : ''}.`;
+    const lista = todas
+        .filter(e => !soloRevisar || e.motivo)
+        .filter(e => !texto || `${e.nombre || ''} ${e.direccion || ''}`.toLowerCase().includes(texto))
+        .sort((a, b) => (b.motivo ? 1 : 0) - (a.motivo ? 1 : 0) || (a.nombre || a.id).localeCompare(b.nombre || b.id));
+    cont.innerHTML = lista.length === 0 ? '<p class="ayuda">No hay direcciones para mostrar.</p>' : lista.map(e => `
+        <div class="dir-guardada ${e.motivo ? 'dir-revisar' : ''}" data-id="${escaparHtml(e.id).replace(/"/g, '&quot;')}">
+            <div class="dir-guardada-cab"><strong>${escaparHtml(e.nombre || e.id)}</strong> <span class="dir-etq">${escaparHtml(e.envio || '')}</span></div>
+            ${e.motivo ? `<div class="dir-aviso">⚠️ ${escaparHtml(e.motivo)}</div>` : ''}
+            <textarea rows="4" placeholder="Nombre completo, DNI, código postal, teléfono, email, dirección, referencia...">${escaparHtml(e.direccion || '')}</textarea>
+            <div class="dir-botones">
+                <button type="button" class="btn btn-exito btn-dir-guardar">💾 Guardar</button>
+                <button type="button" class="btn btn-outline btn-peligro btn-dir-olvidar" title="Borra lo recordado de este cliente">🗑️ Olvidar</button>
+            </div>
+        </div>`).join('');
+}
+
+(function iniciarDireccionesGuardadas() {
+    const cont = document.getElementById('lista-direcciones-guardadas');
+    if (!cont) return;
+    cont.addEventListener('click', ev => {
+        const btn = ev.target.closest('button');
+        const caja = ev.target.closest('.dir-guardada');
+        if (!btn || !caja) return;
+        const id = caja.dataset.id;
+        const e = enviosClientesCache[id];
+        if (!e) return;
+        const nombre = e.nombre || id;
+        if (btn.classList.contains('btn-dir-guardar')) {
+            const direccion = caja.querySelector('textarea').value.trim();
+            btn.disabled = true;
+            corregirDireccionDeCliente(nombre, e.envio, direccion).then(() => {
+                btn.disabled = false;
+                btn.textContent = '✅ Guardado';
+                setTimeout(() => { btn.textContent = '💾 Guardar'; }, 1500);
+            }).catch(err => { console.error(err); btn.disabled = false; alert('No se pudo guardar la dirección. Probá de nuevo.'); });
+        } else if (btn.classList.contains('btn-dir-olvidar')) {
+            const abiertas = todosPedidos.filter(p => Store.normalizarIdCliente(p.cliente || '') === id && esViaOMoto(p.envio)).length;
+            if (!confirm(`¿Olvidar la dirección y el envío recordado de ${nombre}?` + (abiertas ? `\n\nOjo: tiene ${abiertas} par(es) con Via/Moto en las listas, así que se va a volver a recordar con lo que tengan cargado esos pedidos. Para corregirla, mejor editá el texto y tocá Guardar.` : '\n\nLos pedidos no se tocan.'))) return;
+            Store.eliminarEnvioCliente(nombre).then(() => { delete enviosClientesCache[id]; renderizarDireccionesGuardadas(); actualizarAutocompletado(); });
+        }
+    });
+    ['buscar-direcciones', 'solo-revisar-direcciones'].forEach(i => {
+        const el = document.getElementById(i);
+        if (el) el.addEventListener('input', renderizarDireccionesGuardadas);
+    });
+})();
 
 // Junta, por cliente, la dirección cargada en cualquiera de sus líneas (para
 // armar el mensaje que se copia y se le manda al socio).
@@ -2219,6 +2299,7 @@ function pintarUltimoAjusteDeCostos() {
 
 function renderizarConfigUI() {
     if (!configDraft) return;
+    renderizarDireccionesGuardadas();
     pintarUltimoAjusteDeCostos();
     pintarPreciosTienda();
     renderizarListaCategorias();
@@ -2678,6 +2759,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 enviosClientesCache = obj;
                 enviosClientesCargados = true;
                 actualizarAutocompletado();
+                renderizarDireccionesGuardadas();
                 programarSyncEnvios();
             });
         }

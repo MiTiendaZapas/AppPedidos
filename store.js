@@ -445,6 +445,20 @@ const Store = (function () {
         }
     }
 
+    // Olvida lo recordado de un cliente (si todavía tiene pedidos Via/Moto, se vuelve a recordar solo).
+    function eliminarEnvioCliente(nombre) {
+        const id = normalizarIdCliente(nombre);
+        if (modo === 'firebase') {
+            return db.collection('envios_clientes').doc(id).delete();
+        } else {
+            const obj = lsGet(LS_KEYS.enviosClientes, {});
+            delete obj[id];
+            lsSet(LS_KEYS.enviosClientes, obj);
+            emitEnviosClientesLocal();
+            return Promise.resolve();
+        }
+    }
+
     // ---- API STOCK DE CASA --------------------------------------------------
     // Una colección "stock_casa" con un documento por modelo:
     //   { nombre, tipo: 'zapatillas'|'indumentaria', talles: { "38": 2, "39/40": 1 },
@@ -735,7 +749,7 @@ const Store = (function () {
         onPedidos, addPedido, updatePedido, deletePedido, deleteAllPedidos, restorePedidos,
         onRespaldoBorrado, guardarRespaldoBorrado, borrarRespaldoBorrado,
         onClientes, setCliente, eliminarCliente, normalizarIdCliente,
-        onEnviosClientes, setEnvioCliente,
+        onEnviosClientes, setEnvioCliente, eliminarEnvioCliente,
         onStockCasa, guardarModeloStock, cambiarStockTalle, quitarTalleStock, registrarMovimientoStock, descontarStockDePedido, devolverStockDePedido, obtenerMetaStock, obtenerHistorialStock, guardarFotoStock, obtenerFotoStock,
         onConfig, setConfig,
         registrarCierre, obtenerCierresDelMes,
