@@ -97,7 +97,10 @@
             const talles = {};
             const extra = { ...fotosDe(p), marca: p.brand || '', etiqueta: etiquetaDe(p, categorias) };
             if (p.manual) {
-                for (const s of p.sizes || []) talles[String(s.size)] = Number(s.stock) || 0;
+                // "propio": los pares que de verdad son de casa. Una ojota propia con el mismo nombre que una del
+                // proveedor viene en "stock" SUMADA con la del proveedor (para la tienda): usar esa suma mostraba
+                // como stock de casa los pares del proveedor (y desde acá se descontaban).
+                for (const s of p.sizes || []) talles[String(s.size)] = Number(s.propio != null ? s.propio : s.stock) || 0;
                 obj[`p:${p.id}`] = { nombre: p.name, talles, tipo: p.category === 'indumentaria' ? 'indumentaria' : 'zapatillas', ...extra };
             } else {
                 for (const s of p.sizes || []) if (Number(s.extra) > 0) talles[String(s.size)] = Number(s.extra);
